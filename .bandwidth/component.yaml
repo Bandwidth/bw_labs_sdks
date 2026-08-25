@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  schemaVersion: v1.0.0
+  name: bw_labs_sdks
+  description: A home for SDKs and client libraries for Bandwidth Labs
+  annotations:
+    github.com/project-slug: Bandwidth/bw_labs_sdks
+    bandwidth.com/environment: production
+    bandwidth.com/languages: Other
+  organization: BW
+  costCenter: 
+  platformType:
+    - AWS
+  buildPlatform: GitHub Actions
+spec:
+  type: Library
+  owner: github/band-innovation
+  lifecycle: Prototype
+  

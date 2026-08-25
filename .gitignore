@@ -1,0 +1,14 @@
+# Intellij files
+.idea
+*.iml
+*.ipr
+*.iws
+out/
+.idea_modules/
+
+# VSCode
+.vscode
+*.code-workspace
+
+# No canonical github/gitignore template exists for: PHP, Groovy, Shell, Docker, CloudFormation, Other
+# These render baseline-only (IDE ignores above; use .gitignore Options to add macOS rules).
