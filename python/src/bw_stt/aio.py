@@ -86,10 +86,8 @@ def _map_rejected_upgrade(exc: Exception) -> BwSttError | None:
 
 
 async def _open_websocket(url: str, api_key: str) -> Any:
-    try:
-        from websockets.asyncio.client import connect
-    except ImportError:  # websockets 12.x has only the legacy implementation
-        from websockets.client import connect  # type: ignore[no-redef,attr-defined]
+    from websockets.asyncio.client import connect
+
     headers = {API_KEY_HEADER: api_key}
     signature_error: TypeError | None = None
     # websockets renamed the handshake-header argument in version 14

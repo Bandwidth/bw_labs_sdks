@@ -10,7 +10,7 @@ readme = "README.md"
 license = {text = "UNLICENSED"}
 authors = [{name = "Bandwidth"}]
 requires-python = ">=3.10"
-dependencies = ["websockets>=12"]
+dependencies = ["websockets>=13"]
 keywords = ["speech-to-text", "stt", "transcription", "streaming", "bandwidth"]
 classifiers = [
     "Development Status :: 4 - Beta",
