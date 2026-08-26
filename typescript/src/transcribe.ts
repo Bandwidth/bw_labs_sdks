@@ -1,7 +1,6 @@
 import {
   AuthenticationError,
-  BwSttError,
-  ConnectionClosedError,
+  InvalidRequestError,
   parseRetryAfter,
   ProtocolError,
   RateLimitError,
@@ -28,41 +27,65 @@ export interface TranscribeRequest {
   apiKey: string;
   body: Uint8Array;
   timeoutMs: number;
+  signal?: AbortSignal;
 }
 
+function composeSignals(timeout: AbortSignal, caller: AbortSignal | undefined): AbortSignal {
+  if (caller === undefined) return timeout;
+  const any = (AbortSignal as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof any === "function") return any([timeout, caller]);
+  const controller = new AbortController();
+  for (const signal of [timeout, caller]) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+  }
+  return controller.signal;
+}
+
+/** The whole-request deadline spans connection, headers, and body parse. */
 export async function requestTranscription(request: TranscribeRequest): Promise<Transcription> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), request.timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, request.timeoutMs);
   (timer as { unref?: () => void }).unref?.();
-  let response: Response;
+  const timeoutError = () =>
+    new ServiceUnavailableError(`transcribe request timed out after ${request.timeoutMs} ms`);
+  const callerAborted = () => request.signal?.aborted === true;
   try {
-    response = await fetch(request.url, {
-      method: "POST",
-      headers: {
-        [API_KEY_HEADER]: request.apiKey,
-        "Content-Type": "application/octet-stream",
-      },
-      body: request.body,
-      signal: controller.signal,
-    });
-  } catch (cause) {
-    if (controller.signal.aborted) {
-      throw new BwSttError(`transcribe request timed out after ${request.timeoutMs} ms`);
+    let response: Response;
+    try {
+      response = await fetch(request.url, {
+        method: "POST",
+        headers: {
+          [API_KEY_HEADER]: request.apiKey,
+          "Content-Type": "application/octet-stream",
+        },
+        body: request.body,
+        signal: composeSignals(controller.signal, request.signal),
+      });
+    } catch (cause) {
+      if (callerAborted()) throw request.signal?.reason ?? cause;
+      if (timedOut) throw timeoutError();
+      throw new ServiceUnavailableError("transcribe request failed", { cause });
     }
-    throw new ConnectionClosedError("transcribe request failed", { cause });
+    if (!response.ok) {
+      throw await mapHttpFailure(response);
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (cause) {
+      if (callerAborted()) throw request.signal?.reason ?? cause;
+      if (timedOut) throw timeoutError();
+      throw new ProtocolError("transcribe response is not valid JSON", { cause });
+    }
+    return parseTranscription(payload);
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) {
-    throw await mapHttpFailure(response);
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch (cause) {
-    throw new ProtocolError("transcribe response is not valid JSON", { cause });
-  }
-  return parseTranscription(payload);
 }
 
 async function mapHttpFailure(response: Response): Promise<Error> {
@@ -77,15 +100,19 @@ async function mapHttpFailure(response: Response): Promise<Error> {
     );
   }
   if (status === 413) {
-    return new ProtocolError(
+    return new InvalidRequestError(
       `audio exceeds the transcribe limit of ${TRANSCRIBE_MAX_AUDIO_MINUTES} minutes (HTTP 413)`,
+      status,
     );
   }
   if (status >= 500) {
     return new ServiceUnavailableError(`transcribe service unavailable (HTTP ${status})`);
   }
   const detail = await response.text().catch(() => "");
-  return new ProtocolError(`transcribe request rejected (HTTP ${status})${detail ? `: ${detail}` : ""}`);
+  return new InvalidRequestError(
+    `transcribe request rejected (HTTP ${status})${detail ? `: ${detail}` : ""}`,
+    status,
+  );
 }
 
 function parseTranscription(payload: unknown): Transcription {

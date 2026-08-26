@@ -19,6 +19,8 @@ export interface TransportHandlers {
 export interface TransportSocket {
   send(data: string | Uint8Array): void;
   close(code?: number, reason?: string): void;
+  /** Bytes queued locally but not yet transmitted, when the socket exposes it. */
+  readonly bufferedAmount?: number;
 }
 
 /** Opens a WebSocket and wires its lifecycle into the handlers. Injectable for tests. */
@@ -60,11 +62,15 @@ async function nodeTransport(request: TransportRequest, handlers: TransportHandl
   return {
     send: (data) => socket.send(data),
     close: (code, reason) => socket.close(code, reason),
+    get bufferedAmount() {
+      return socket.bufferedAmount;
+    },
   };
 }
 
 interface BrowserWebSocket {
   binaryType: string;
+  readonly bufferedAmount: number;
   send(data: string | Uint8Array): void;
   close(code?: number, reason?: string): void;
   addEventListener(type: "open", listener: () => void): void;
@@ -95,5 +101,8 @@ function browserTransport(request: TransportRequest, handlers: TransportHandlers
   return {
     send: (data) => socket.send(data),
     close: (code, reason) => socket.close(code, reason),
+    get bufferedAmount() {
+      return socket.bufferedAmount;
+    },
   };
 }

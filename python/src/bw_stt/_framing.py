@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import struct
 import wave
 from collections.abc import Iterator
 from pathlib import Path
+from typing import BinaryIO
 
 MIN_FRAME_MS = 20
 MAX_FRAME_MS = 1000
 CHUNK_MS = 160
 _RAW_READ_BYTES = 64 * 1024
+
+WAVE_FORMAT_PCM = 0x0001
+WAVE_FORMAT_EXTENSIBLE = 0xFFFE
 
 
 def sample_align_bytes(encoding: str, channels: int) -> int:
@@ -106,14 +111,107 @@ class FrameChunker:
         return tail
 
 
-def _open_wav(path: str | Path) -> wave.Wave_read:
+class _UnsupportedWavFormat(ValueError):
+    """A structurally valid WAV file whose sample format this SDK cannot send."""
+
+
+class _ExtensiblePcmWav:
+    """Reader for WAVE_FORMAT_EXTENSIBLE PCM16 files.
+
+    The stdlib wave module rejects the extensible format tag on Python 3.10
+    and 3.11; this fallback parses the fmt and data chunks directly and
+    exposes the subset of the wave.Wave_read API this SDK uses.
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._data_bytes = 0
+        self._file: BinaryIO = open(path, "rb")  # noqa: SIM115 - the reader owns the handle
+        try:
+            self._parse(path)
+        except BaseException:
+            self._file.close()
+            raise
+        self._remaining = self._data_bytes
+
+    def _parse(self, path: str | Path) -> None:
+        header = self._file.read(12)
+        if len(header) != 12 or header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise ValueError(f"{path} is not a readable WAV file: missing RIFF/WAVE header")
+        fmt: bytes | None = None
+        while True:
+            chunk_header = self._file.read(8)
+            if len(chunk_header) != 8:
+                raise ValueError(f"{path} is not a readable WAV file: no data chunk")
+            chunk_id, chunk_size = struct.unpack("<4sI", chunk_header)
+            if chunk_id == b"fmt ":
+                fmt = self._file.read(chunk_size)
+                if chunk_size % 2:
+                    self._file.read(1)
+            elif chunk_id == b"data":
+                if fmt is None:
+                    raise ValueError(f"{path} is not a readable WAV file: data before fmt chunk")
+                self._check_fmt(fmt, path)
+                self._data_bytes = int(chunk_size)
+                return
+            else:
+                self._file.seek(chunk_size + chunk_size % 2, 1)
+
+    def _check_fmt(self, fmt: bytes, path: str | Path) -> None:
+        if len(fmt) < 16:
+            raise ValueError(f"{path} is not a readable WAV file: truncated fmt chunk")
+        format_tag, channels, sample_rate, _, _, bits = struct.unpack("<HHIIHH", fmt[:16])
+        if format_tag == WAVE_FORMAT_EXTENSIBLE:
+            if len(fmt) < 26:
+                raise ValueError(f"{path} is not a readable WAV file: truncated extensible fmt")
+            (format_tag,) = struct.unpack("<H", fmt[24:26])
+        if format_tag != WAVE_FORMAT_PCM or bits != 16:
+            raise _UnsupportedWavFormat(f"{path}: WAV audio must be 16-bit PCM")
+        self._channels = int(channels)
+        self._sample_rate = int(sample_rate)
+        self._frame_size = 2 * self._channels
+
+    def getcomptype(self) -> str:
+        return "NONE"
+
+    def getsampwidth(self) -> int:
+        return 2
+
+    def getframerate(self) -> int:
+        return self._sample_rate
+
+    def getnchannels(self) -> int:
+        return self._channels
+
+    def getnframes(self) -> int:
+        return self._data_bytes // self._frame_size
+
+    def readframes(self, nframes: int) -> bytes:
+        count = min(nframes * self._frame_size, self._remaining)
+        data = self._file.read(count)
+        self._remaining -= len(data)
+        return data
+
+    def close(self) -> None:
+        self._file.close()
+
+
+_WavReader = wave.Wave_read | _ExtensiblePcmWav
+
+
+def _open_wav(path: str | Path) -> _WavReader:
     try:
         return wave.open(str(path), "rb")
     except (wave.Error, EOFError) as exc:
+        try:
+            return _ExtensiblePcmWav(path)
+        except _UnsupportedWavFormat:
+            raise
+        except (OSError, ValueError):
+            pass
         raise ValueError(f"{path} is not a readable WAV file: {exc}") from exc
 
 
-def _check_pcm16(reader: wave.Wave_read, path: str | Path) -> None:
+def _check_pcm16(reader: _WavReader, path: str | Path) -> None:
     if reader.getcomptype() != "NONE":
         raise ValueError(f"{path}: WAV audio must be uncompressed PCM")
     if reader.getsampwidth() != 2:

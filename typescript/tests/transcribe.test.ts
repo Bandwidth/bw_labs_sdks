@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { BwSttClient } from "../src/client";
 import {
   AuthenticationError,
-  BwSttError,
+  InvalidRequestError,
   ProtocolError,
   RateLimitError,
   ServiceUnavailableError,
@@ -28,6 +28,8 @@ interface MockResponse {
   headers?: Record<string, string>;
   body?: string;
   hang?: boolean;
+  /** Send headers and a partial body, then stall without ending the response. */
+  stallBody?: boolean;
 }
 
 const OK_BODY = JSON.stringify({
@@ -72,6 +74,10 @@ class MockTranscribeServer {
             "content-type": "application/json",
             ...mock.headers,
           });
+          if (mock.stallBody) {
+            response.write((mock.body ?? OK_BODY).slice(0, 8));
+            return;
+          }
           response.end(mock.body ?? OK_BODY);
         });
       });
@@ -150,6 +156,7 @@ describe("transcribe", () => {
 
   it("rejects invalid keyword lists before sending", async () => {
     await expect(client().transcribe(pcmBytes(2), { keywords: [""] })).rejects.toThrow(TypeError);
+    await expect(client().transcribe(pcmBytes(2), { keywords: ["  \t"] })).rejects.toThrow(TypeError);
     const many = Array.from({ length: 101 }, (_, index) => `kw${index}`);
     await expect(client().transcribe(pcmBytes(2), { keywords: many })).rejects.toThrow(RangeError);
     expect(server.requests).toHaveLength(0);
@@ -195,6 +202,26 @@ describe("transcribeFile", () => {
     await writeFile(path, buildWav({ sampleRate: 8000, channels: 1, samplesPerChannel: 400, bitsPerSample: 8 }));
     await expect(client().transcribeFile(path)).rejects.toThrow(/16-bit PCM/);
   });
+
+  it("accepts WAVE_FORMAT_EXTENSIBLE with a PCM subformat", async () => {
+    const payload = pcmBytes(800);
+    const wav = buildWav({ sampleRate: 8000, channels: 1, samplesPerChannel: 400, extensibleSubFormat: 1 });
+    wav.set(payload, wav.byteLength - payload.byteLength);
+    const path = join(directory, "extensible.wav");
+    await writeFile(path, wav);
+    await client().transcribeFile(path);
+    const request = server.requests[0]!;
+    expect(request.url.searchParams.get("encoding")).toBe("linear16");
+    expect(request.url.searchParams.get("sample_rate")).toBe("8000");
+    expect(new Uint8Array(request.body)).toEqual(payload);
+  });
+
+  it("rejects WAVE_FORMAT_EXTENSIBLE with a non-PCM subformat", async () => {
+    const path = join(directory, "extensible-float.wav");
+    await writeFile(path, buildWav({ sampleRate: 8000, channels: 1, samplesPerChannel: 400, extensibleSubFormat: 3 }));
+    await expect(client().transcribeFile(path)).rejects.toThrow(/16-bit PCM/);
+    expect(server.requests).toHaveLength(0);
+  });
 });
 
 describe("transcribe error mapping", () => {
@@ -215,12 +242,35 @@ describe("transcribe error mapping", () => {
     expect((failure as RateLimitError).retryAfterSeconds).toBe(9);
   });
 
-  it("maps 413 to a clear error naming the five minute cap", async () => {
-    server.response = { status: 413, body: "{}" };
-    await expect(client().transcribe(pcmBytes(2))).rejects.toThrow(/5 minutes/);
+  it("maps 429 with an HTTP-date Retry-After to seconds from now", async () => {
+    const retryDate = new Date(Date.now() + 30_000).toUTCString();
+    server.response = { status: 429, headers: { "retry-after": retryDate }, body: "{}" };
+    const failure = await client()
+      .transcribe(pcmBytes(2))
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(RateLimitError);
+    const seconds = (failure as RateLimitError).retryAfterSeconds;
+    expect(seconds).toBeGreaterThanOrEqual(25);
+    expect(seconds).toBeLessThanOrEqual(30);
   });
 
-  it("maps 400 to ProtocolError with the response detail", async () => {
+  it("maps 413 to InvalidRequestError naming the five minute cap", async () => {
+    server.response = { status: 413, body: "{}" };
+    const failure = await client()
+      .transcribe(pcmBytes(2))
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(InvalidRequestError);
+    expect((failure as InvalidRequestError).message).toContain("5 minutes");
+    expect((failure as InvalidRequestError).status).toBe(413);
+  });
+
+  it("maps 400 to InvalidRequestError with the response detail", async () => {
     server.response = { status: 400, body: "unknown parameter: pitch" };
     const failure = await client()
       .transcribe(pcmBytes(2))
@@ -228,8 +278,9 @@ describe("transcribe error mapping", () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(failure).toBeInstanceOf(ProtocolError);
-    expect((failure as ProtocolError).message).toContain("unknown parameter: pitch");
+    expect(failure).toBeInstanceOf(InvalidRequestError);
+    expect((failure as InvalidRequestError).message).toContain("unknown parameter: pitch");
+    expect((failure as InvalidRequestError).status).toBe(400);
   });
 
   it("maps 5xx to ServiceUnavailableError", async () => {
@@ -237,7 +288,12 @@ describe("transcribe error mapping", () => {
     await expect(client().transcribe(pcmBytes(2))).rejects.toBeInstanceOf(ServiceUnavailableError);
   });
 
-  it("times out with a clear error", async () => {
+  it("maps network failures to ServiceUnavailableError", async () => {
+    const unreachable = new BwSttClient({ apiKey: KEY, baseUrl: "ws://127.0.0.1:9" });
+    await expect(unreachable.transcribe(pcmBytes(2))).rejects.toBeInstanceOf(ServiceUnavailableError);
+  });
+
+  it("times out before headers with ServiceUnavailableError", async () => {
     server.response = { hang: true };
     const failure = await client()
       .transcribe(pcmBytes(2), { timeoutMs: 60 })
@@ -245,8 +301,22 @@ describe("transcribe error mapping", () => {
         () => undefined,
         (error: unknown) => error,
       );
-    expect(failure).toBeInstanceOf(BwSttError);
-    expect((failure as BwSttError).message).toContain("timed out");
+    expect(failure).toBeInstanceOf(ServiceUnavailableError);
+    expect((failure as ServiceUnavailableError).message).toContain("timed out");
+  });
+
+  it("times out during a stalled body with ServiceUnavailableError, not ProtocolError", async () => {
+    server.response = { stallBody: true };
+    const started = Date.now();
+    const failure = await client()
+      .transcribe(pcmBytes(2), { timeoutMs: 80 })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(failure).toBeInstanceOf(ServiceUnavailableError);
+    expect((failure as ServiceUnavailableError).message).toContain("timed out");
   });
 
   it("rejects malformed response bodies with ProtocolError", async () => {
@@ -254,5 +324,36 @@ describe("transcribe error mapping", () => {
     await expect(client().transcribe(pcmBytes(2))).rejects.toBeInstanceOf(ProtocolError);
     server.response = { body: JSON.stringify({ text: "missing fields" }) };
     await expect(client().transcribe(pcmBytes(2))).rejects.toBeInstanceOf(ProtocolError);
+  });
+});
+
+describe("transcribe caller signal", () => {
+  it("rejects with the caller's abort reason mid-request", async () => {
+    server.response = { hang: true };
+    const controller = new AbortController();
+    const pending = client().transcribe(pcmBytes(2), { timeoutMs: 5000, signal: controller.signal });
+    setTimeout(() => controller.abort(new Error("caller cancelled")), 20);
+    await expect(pending).rejects.toThrow("caller cancelled");
+  });
+
+  it("rejects immediately when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("pre-aborted"));
+    await expect(client().transcribe(pcmBytes(2), { signal: controller.signal })).rejects.toThrow("pre-aborted");
+  });
+
+  it("composes signals manually when AbortSignal.any is unavailable", async () => {
+    server.response = { hang: true };
+    const signalClass = AbortSignal as unknown as Record<string, unknown>;
+    const originalAny = signalClass.any;
+    delete signalClass.any;
+    try {
+      const controller = new AbortController();
+      const pending = client().transcribe(pcmBytes(2), { timeoutMs: 5000, signal: controller.signal });
+      setTimeout(() => controller.abort(new Error("manual compose")), 20);
+      await expect(pending).rejects.toThrow("manual compose");
+    } finally {
+      signalClass.any = originalAny;
+    }
   });
 });

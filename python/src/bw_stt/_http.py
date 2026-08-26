@@ -6,7 +6,8 @@ import json
 import urllib.error
 import urllib.request
 from collections.abc import Sequence
-from email.message import Message
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from ._framing import read_wav_file
@@ -81,18 +82,33 @@ def _post(url: str, api_key: str, data: bytes, timeout: float) -> Transcription:
     except urllib.error.HTTPError as exc:
         raise _map_http_error(exc) from exc
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise ServiceUnavailableError(
+                f"transcribe request timed out after {timeout:g}s"
+            ) from exc
         raise ServiceUnavailableError(f"transcribe request failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise ServiceUnavailableError(f"transcribe request timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        raise ServiceUnavailableError(f"transcribe request failed: {exc}") from exc
     return parse_transcription(body)
 
 
-def _retry_after(headers: Message) -> float | None:
-    value = headers.get("Retry-After")
+def parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header: delta-seconds or an HTTP-date, as seconds from now."""
     if value is None:
         return None
     try:
         return float(value)
     except ValueError:
+        pass
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
         return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max((when - datetime.now(timezone.utc)).total_seconds(), 0.0)
 
 
 def _error_detail(exc: urllib.error.HTTPError) -> str:
@@ -118,7 +134,9 @@ def _map_http_error(exc: urllib.error.HTTPError) -> BwSttError:
     if status in (401, 403):
         return AuthenticationError(f"API key rejected (HTTP {status})")
     if status == 429:
-        return RateLimitError("rate limited (HTTP 429)", retry_after=_retry_after(exc.headers))
+        return RateLimitError(
+            "rate limited (HTTP 429)", retry_after=parse_retry_after(exc.headers.get("Retry-After"))
+        )
     if status == 400:
         return InvalidRequestError(f"invalid transcribe request (HTTP 400){_error_detail(exc)}")
     if status == 413:

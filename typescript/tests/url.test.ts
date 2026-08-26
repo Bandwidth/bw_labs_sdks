@@ -83,6 +83,11 @@ describe("buildListenUrl", () => {
     expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { keywords: [""] })).toThrow(TypeError);
   });
 
+  it("rejects whitespace-only keywords", () => {
+    expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { keywords: ["   "] })).toThrow(TypeError);
+    expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { keywords: ["\t\n"] })).toThrow(TypeError);
+  });
+
   it("rejects invalid media combinations", () => {
     expect(() => buildListenUrl("wss://x", { sampleRate: 44100 })).toThrow(RangeError);
     expect(() => buildListenUrl("wss://x", { channels: 3 })).toThrow(RangeError);
@@ -105,6 +110,17 @@ describe("buildTranscribeUrl", () => {
     const url = new URL(buildTranscribeUrl("ws://127.0.0.1:9000/audio/v1/listen", {}));
     expect(url.protocol).toBe("http:");
     expect(url.pathname).toBe("/audio/v1/transcribe");
+  });
+
+  it("appends /transcribe to any other custom path", () => {
+    expect(new URL(buildTranscribeUrl("wss://gw.example.com/stt", {})).pathname).toBe("/stt/transcribe");
+    expect(new URL(buildTranscribeUrl("https://gw.example.com/stt/", {})).pathname).toBe("/stt/transcribe");
+  });
+
+  it("keeps http and https bases on their scheme", () => {
+    expect(new URL(buildTranscribeUrl("http://example.com", {})).protocol).toBe("http:");
+    expect(new URL(buildTranscribeUrl("http://example.com", {})).pathname).toBe("/audio/v1/transcribe");
+    expect(new URL(buildTranscribeUrl("https://example.com", {})).protocol).toBe("https:");
   });
 
   it("carries media, PII, and keyword parameters", () => {

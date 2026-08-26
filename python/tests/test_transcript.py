@@ -10,6 +10,7 @@ SEGMENTS = [
         end=0.20,
         text="i need",
         words=(Word("i", 0.00, 0.12), Word("need", 0.16, 0.20)),
+        raw={},
     ),
     Segment(
         channel=0,
@@ -17,6 +18,7 @@ SEGMENTS = [
         end=0.44,
         text=" a dr",
         words=(Word("a", 0.24, 0.32), Word("dr", 0.36, 0.44)),
+        raw={},
     ),
     Segment(
         channel=0,
@@ -24,6 +26,7 @@ SEGMENTS = [
         end=0.72,
         text="y van",
         words=(Word("y", 0.48, 0.56), Word("van", 0.60, 0.72)),
+        raw={},
     ),
 ]
 
@@ -58,9 +61,13 @@ def test_word_assembler_grows_partial_words() -> None:
 
 def test_word_assembler_leading_space_starts_new_word() -> None:
     assembler = WordAssembler()
-    assembler.push(Segment(channel=0, start=0.0, end=0.1, text="hi", words=(Word("hi", 0.0, 0.1),)))
+    assembler.push(
+        Segment(channel=0, start=0.0, end=0.1, text="hi", words=(Word("hi", 0.0, 0.1),), raw={})
+    )
     words = assembler.push(
-        Segment(channel=0, start=0.2, end=0.3, text=" there", words=(Word("there", 0.2, 0.3),))
+        Segment(
+            channel=0, start=0.2, end=0.3, text=" there", words=(Word("there", 0.2, 0.3),), raw={}
+        )
     )
     assert [w.text for w in words] == ["hi", "there"]
 
@@ -68,11 +75,11 @@ def test_word_assembler_leading_space_starts_new_word() -> None:
 def test_word_assembler_first_segment_without_space() -> None:
     assembler = WordAssembler()
     words = assembler.push(
-        Segment(channel=0, start=0.0, end=0.1, text="go", words=(Word("go", 0.0, 0.1),))
+        Segment(channel=0, start=0.0, end=0.1, text="go", words=(Word("go", 0.0, 0.1),), raw={})
     )
     assert [w.text for w in words] == ["go"]
 
 
 def test_word_assembler_empty_segment() -> None:
     assembler = WordAssembler()
-    assert assembler.push(Segment(channel=0, start=0.0, end=0.0, text="", words=())) == []
+    assert assembler.push(Segment(channel=0, start=0.0, end=0.0, text="", words=(), raw={})) == []

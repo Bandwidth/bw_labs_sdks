@@ -286,6 +286,87 @@ describe("event delivery", () => {
     await expect(session.closeStream()).rejects.toBeInstanceOf(ConnectionClosedError);
   });
 
+  it("events() keeps events that arrive before the first pull", async () => {
+    const server = await startServer();
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect();
+    const iterator = session.events();
+    const seen: string[] = [];
+    session.on("segment", (segment) => seen.push(segment.text));
+    const connection = await server.waitForConnection();
+    connection.send(segmentEvent("one"));
+    connection.send(segmentEvent(" two"));
+    await waitFor(() => seen.length === 2);
+    await session.closeStream();
+    const collected: SttEvent[] = [];
+    for await (const event of iterator) collected.push(event);
+    const texts = collected.filter((event): event is Segment => event.type === "Segment").map((event) => event.text);
+    expect(texts).toEqual(["one", " two"]);
+    expect(collected[collected.length - 1]!.type).toBe("SessionClosed");
+  });
+
+  it("a throwing closed listener does not break shutdown and surfaces asynchronously", async () => {
+    const server = await startServer();
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect();
+    const surfaced: unknown[] = [];
+    const previous = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    const capture: NodeJS.UncaughtExceptionListener = (error) => {
+      surfaced.push(error);
+    };
+    process.on("uncaughtException", capture);
+    try {
+      session.on("closed", () => {
+        throw new Error("listener bug");
+      });
+      const iteration = (async () => {
+        const seen: SttEvent[] = [];
+        for await (const event of session.events()) seen.push(event);
+        return seen;
+      })();
+      const closed = await session.closeStream();
+      expect(closed.type).toBe("SessionClosed");
+      const iterated = await iteration;
+      expect(iterated[iterated.length - 1]!.type).toBe("SessionClosed");
+      await waitFor(() => surfaced.length === 1);
+      expect((surfaced[0] as Error).message).toBe("listener bug");
+    } finally {
+      process.removeListener("uncaughtException", capture);
+      for (const listener of previous) process.on("uncaughtException", listener);
+    }
+  });
+
+  it("a throwing listener does not starve later listeners of the same event", async () => {
+    const server = await startServer();
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect();
+    const previous = process.listeners("uncaughtException");
+    process.removeAllListeners("uncaughtException");
+    const surfaced: unknown[] = [];
+    const capture: NodeJS.UncaughtExceptionListener = (error) => {
+      surfaced.push(error);
+    };
+    process.on("uncaughtException", capture);
+    try {
+      let secondRan = false;
+      session.on("segment", () => {
+        throw new Error("first listener bug");
+      });
+      session.on("segment", () => {
+        secondRan = true;
+      });
+      const connection = await server.waitForConnection();
+      connection.send(segmentEvent("hello"));
+      await waitFor(() => secondRan);
+      await waitFor(() => surfaced.length === 1);
+    } finally {
+      process.removeListener("uncaughtException", capture);
+      for (const listener of previous) process.on("uncaughtException", listener);
+      session.disconnect();
+    }
+  });
+
   it("completes iterators quietly on local disconnect", async () => {
     const server = await startServer();
     const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
@@ -319,6 +400,21 @@ describe("keepalive", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(connection.keepAlives).toBe(0);
     session.disconnect();
+  });
+
+  it("sends nothing when disabled with null", async () => {
+    const server = await startServer();
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect({ keepAliveIntervalMs: null });
+    const connection = await server.waitForConnection();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(connection.keepAlives).toBe(0);
+    session.disconnect();
+  });
+
+  it("rejects a negative interval", async () => {
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: "ws://127.0.0.1:1" });
+    await expect(client.connect({ keepAliveIntervalMs: -1 })).rejects.toThrow(RangeError);
   });
 });
 
@@ -371,6 +467,35 @@ describe("streamFile", () => {
         // unreachable
       }
     }).rejects.toThrow(/8000 Hz.*16000 Hz/s);
+    session.disconnect();
+  });
+
+  it("streams a WAVE_FORMAT_EXTENSIBLE file with a PCM subformat", async () => {
+    const server = await startServer();
+    const path = join(directory, "extensible.wav");
+    await writeFile(path, buildWav({ sampleRate: 16000, channels: 1, samplesPerChannel: 2880, extensibleSubFormat: 1 }));
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect();
+    for await (const _segment of session.streamFile(path)) {
+      // no segments scripted for this server
+    }
+    const connection = await server.waitForConnection();
+    await waitFor(() => connection.audioBytes === 5760);
+    expect(connection.audioFrames).toEqual([5120, 640]);
+    await session.closeStream();
+  });
+
+  it("rejects a WAVE_FORMAT_EXTENSIBLE file with a non-PCM subformat", async () => {
+    const server = await startServer();
+    const path = join(directory, "extensible-float.wav");
+    await writeFile(path, buildWav({ sampleRate: 16000, channels: 1, samplesPerChannel: 2880, extensibleSubFormat: 3 }));
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect();
+    await expect(async () => {
+      for await (const _segment of session.streamFile(path)) {
+        // unreachable
+      }
+    }).rejects.toThrow(/16-bit PCM/);
     session.disconnect();
   });
 

@@ -14,7 +14,11 @@ import { FrameChunker, toUint8Array, validateFrame } from "./framing";
 import { KeepAliveTimer } from "./keepalive";
 import type { TransportHandlers, TransportSocket } from "./transport";
 import { isNode } from "./transport";
-import { WavReader } from "./wav";
+import type { WavInfo } from "./wav";
+import { isPcm16, WavReader } from "./wav";
+
+const MAX_BUFFERED_SEND_BYTES = 1 << 20;
+const DRAIN_POLL_MS = 10;
 
 export interface SessionEventMap {
   segment: Segment;
@@ -122,6 +126,8 @@ export class SttSession {
 
   constructor(init: SttSessionInit) {
     this.frameConfig = init.frameConfig;
+    // A connect timeout can reject before attach awaits this promise.
+    this.openedDeferred.promise.catch(() => {});
     this.keepAlive = new KeepAliveTimer(init.keepAliveIntervalMs, () => {
       try {
         this.socket?.send(JSON.stringify({ type: "KeepAlive" }));
@@ -181,7 +187,8 @@ export class SttSession {
 
   /** All server events in arrival order. Completes after SessionClosed. */
   events(): AsyncIterableIterator<SttEvent> {
-    return this.subscribeIterator((event) => event);
+    // Subscribe now so events arriving before the first pull are not lost.
+    return this.consumeQueue(this.subscribe());
   }
 
   on<K extends keyof SessionEventMap>(name: K, listener: Listener<K>): void {
@@ -262,6 +269,12 @@ export class SttSession {
     return this.openedDeferred.promise;
   }
 
+  /** Wiring used by BwSttClient; not part of the public API. */
+  failConnect(error: Error): void {
+    if (this.state !== "connecting") return;
+    this.settleConnect(error);
+  }
+
   private ensureOpen(): void {
     if (this.failure !== undefined) throw this.failure;
     switch (this.state) {
@@ -287,6 +300,7 @@ export class SttSession {
   }
 
   private handleText(text: string): void {
+    if (this.state === "failed" || this.state === "disconnected") return;
     let event: SttEvent;
     try {
       event = parseEvent(text);
@@ -313,13 +327,11 @@ export class SttSession {
 
   private dispatch(event: SttEvent): void {
     if (event.type === "Error") this.lastErrorEvent = event;
-    if (event.type === "SessionClosed") this.closedEvent = event;
     for (const queue of this.queues) queue.push(event);
-    this.emit("event", event);
-    if (event.type === "Segment") this.emit("segment", event);
-    else if (event.type === "Error") this.emit("error", event);
-    else if (event.type === "SessionClosed") this.emit("closed", event);
     if (event.type === "SessionClosed") {
+      // Complete every state transition before user listeners run; a throwing
+      // listener must not leave the session half closed.
+      this.closedEvent = event;
       this.state = "closed";
       this.keepAlive.stop();
       for (const queue of this.queues) queue.end();
@@ -330,12 +342,25 @@ export class SttSession {
         // Server side usually closes first.
       }
     }
+    this.emit("event", event);
+    if (event.type === "Segment") this.emit("segment", event);
+    else if (event.type === "Error") this.emit("error", event);
+    else if (event.type === "SessionClosed") this.emit("closed", event);
   }
 
   private emit<K extends keyof SessionEventMap>(name: K, event: SessionEventMap[K]): void {
     const set = this.listeners.get(name);
     if (set === undefined) return;
-    for (const listener of set) (listener as Listener<K>)(event);
+    for (const listener of [...set]) {
+      try {
+        (listener as Listener<K>)(event);
+      } catch (error) {
+        // Surface developer bugs without breaking the session or its peers.
+        queueMicrotask(() => {
+          throw error;
+        });
+      }
+    }
   }
 
   private handleClose(code?: number, reason?: string): void {
@@ -414,13 +439,12 @@ export class SttSession {
     this.queues.delete(queue);
   }
 
-  private async *subscribeIterator<T>(map: (event: SttEvent) => T): AsyncIterableIterator<T> {
-    const queue = this.subscribe();
+  private async *consumeQueue(queue: EventQueue): AsyncIterableIterator<SttEvent> {
     try {
       while (true) {
         const result = await queue.next();
         if (result.done) return;
-        yield map(result.value);
+        yield result.value;
       }
     } finally {
       this.unsubscribe(queue);
@@ -438,10 +462,21 @@ export class SttSession {
     if (tail !== undefined) yield tail;
   }
 
+  /** Poll until the socket's send buffer drains below the cap. */
+  private async waitForDrain(): Promise<void> {
+    while (this.state === "open") {
+      if (this.failure !== undefined) throw this.failure;
+      const buffered = this.socket?.bufferedAmount;
+      if (buffered === undefined || buffered <= MAX_BUFFERED_SEND_BYTES) return;
+      await new Promise((resolve) => setTimeout(resolve, DRAIN_POLL_MS));
+    }
+  }
+
   private async *runStream(frames: AsyncGenerator<Uint8Array>): AsyncIterableIterator<Segment> {
     const queue = this.subscribe();
     try {
       for await (const frame of frames) {
+        await this.waitForDrain();
         this.sendAudio(frame);
         for (const event of queue.drain()) {
           if (event.type === "Segment") yield event;
@@ -487,13 +522,13 @@ export class SttSession {
     }
   }
 
-  private validateWavInfo(info: { formatTag: number; channels: number; sampleRate: number; bitsPerSample: number }, path: string): void {
+  private validateWavInfo(info: WavInfo, path: string): void {
     if (this.frameConfig.encoding !== "linear16") {
       throw new TypeError(
         `${path}: WAV input requires a linear16 session (this session is ${this.frameConfig.encoding}); pass raw: true for headerless audio`,
       );
     }
-    if (info.formatTag !== 1 || info.bitsPerSample !== 16) {
+    if (!isPcm16(info)) {
       throw new TypeError(`${path}: only 16-bit PCM WAV is supported; pass raw: true for headerless audio`);
     }
     if (info.sampleRate !== this.frameConfig.sampleRate || info.channels !== this.frameConfig.channels) {
@@ -515,8 +550,8 @@ function mapUpgradeFailure(status: number, headers: Readonly<Record<string, stri
       parseRetryAfter(headers["retry-after"]),
     );
   }
-  if (status === 503) {
-    return new ServiceUnavailableError("service temporarily unavailable (HTTP 503)");
+  if (status >= 500) {
+    return new ServiceUnavailableError(`service temporarily unavailable (HTTP ${status})`);
   }
   return new ConnectionClosedError(`WebSocket upgrade failed with HTTP ${status}`);
 }

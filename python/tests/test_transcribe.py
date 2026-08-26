@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import contextlib
+import socket
+import threading
+import time
+from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -14,9 +21,46 @@ from bw_stt import (
     ServiceUnavailableError,
     Transcription,
 )
+from bw_stt._http import parse_retry_after
 
 from .conftest import HttpServerFactory, write_wav
 from .mocks import HttpScript
+
+
+@contextlib.contextmanager
+def stalled_http_server(send_partial_body: bool) -> Iterator[str]:
+    """A server that accepts a request and then never finishes the response."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    release = threading.Event()
+
+    def serve() -> None:
+        try:
+            conn, _ = listener.accept()
+        except OSError:
+            return
+        with conn, contextlib.suppress(OSError):
+            conn.settimeout(5.0)
+            conn.recv(65536)
+            if send_partial_body:
+                conn.sendall(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: application/json\r\n"
+                    b"Content-Length: 1000\r\n\r\n{"
+                )
+            release.wait(10.0)
+
+    thread = threading.Thread(target=serve, name="stalled-http", daemon=True)
+    thread.start()
+    try:
+        yield f"ws://127.0.0.1:{port}/audio/v1/listen"
+    finally:
+        release.set()
+        listener.close()
+        thread.join(timeout=5.0)
 
 
 def test_transcribe_bytes_params_and_response(
@@ -140,6 +184,45 @@ def test_transcribe_rate_limit_retry_after(
     with pytest.raises(RateLimitError) as excinfo:
         client.transcribe(b"\0" * 3200)
     assert excinfo.value.retry_after == 3.5
+
+
+def test_transcribe_rate_limit_retry_after_http_date(
+    mock_http_server: HttpServerFactory, api_key_env: str
+) -> None:
+    when = datetime.now(timezone.utc) + timedelta(seconds=60)
+    header = format_datetime(when, usegmt=True)
+    server = mock_http_server(HttpScript(status=429, headers={"Retry-After": header}))
+    client = BwSttClient(base_url=server.base_url)
+    with pytest.raises(RateLimitError) as excinfo:
+        client.transcribe(b"\0" * 3200)
+    assert excinfo.value.retry_after is not None
+    assert 50.0 <= excinfo.value.retry_after <= 60.0
+
+
+def test_parse_retry_after_forms() -> None:
+    assert parse_retry_after(None) is None
+    assert parse_retry_after("2.5") == 2.5
+    assert parse_retry_after("not a date") is None
+    past = datetime.now(timezone.utc) - timedelta(seconds=60)
+    assert parse_retry_after(format_datetime(past, usegmt=True)) == 0.0
+
+
+def test_transcribe_timeout_on_stalled_headers(api_key_env: str) -> None:
+    with stalled_http_server(send_partial_body=False) as base_url:
+        client = BwSttClient(base_url=base_url)
+        start = time.monotonic()
+        with pytest.raises(ServiceUnavailableError, match=r"timed out after 0\.5s"):
+            client.transcribe(b"\0" * 3200, timeout=0.5)
+        assert time.monotonic() - start < 3.0
+
+
+def test_transcribe_timeout_on_stalled_body(api_key_env: str) -> None:
+    with stalled_http_server(send_partial_body=True) as base_url:
+        client = BwSttClient(base_url=base_url)
+        start = time.monotonic()
+        with pytest.raises(ServiceUnavailableError, match=r"timed out after 0\.5s"):
+            client.transcribe(b"\0" * 3200, timeout=0.5)
+        assert time.monotonic() - start < 3.0
 
 
 def test_transcribe_malformed_response(

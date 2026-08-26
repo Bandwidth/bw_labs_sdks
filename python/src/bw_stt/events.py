@@ -45,6 +45,7 @@ class Segment:
     end: float
     text: str
     words: tuple[Word, ...]
+    raw: dict[str, Any] = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,7 @@ def parse_event(payload: str | bytes) -> Event:
             end=_number(value, "end"),
             text=_string(value, "text"),
             words=_words(value),
+            raw=value,
         )
     if event_type == "Error":
         return ErrorEvent(code=_string(value, "code"), message=_string(value, "message"), raw=value)

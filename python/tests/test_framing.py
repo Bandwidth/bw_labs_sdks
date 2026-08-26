@@ -6,6 +6,7 @@ import pytest
 
 from bw_stt._framing import (
     FrameChunker,
+    _ExtensiblePcmWav,
     frame_bytes,
     iter_raw_chunks,
     iter_wav_chunks,
@@ -13,7 +14,7 @@ from bw_stt._framing import (
     validate_frame,
 )
 
-from .conftest import write_wav
+from .conftest import write_extensible_wav, write_wav
 
 
 def test_frame_byte_math() -> None:
@@ -144,3 +145,43 @@ def test_iter_raw_chunks(tmp_path: Path) -> None:
     path = tmp_path / "a.pcm"
     path.write_bytes(b"\x01" * 100_000)
     assert b"".join(iter_raw_chunks(path)) == b"\x01" * 100_000
+
+
+def test_read_extensible_wav(tmp_path: Path) -> None:
+    path = tmp_path / "ext.wav"
+    payload = write_extensible_wav(path, seconds=0.25, sample_rate=8000, channels=2)
+    data, rate, channels = read_wav_file(path)
+    assert data == payload
+    assert rate == 8000
+    assert channels == 2
+
+
+def test_iter_extensible_wav_chunks(tmp_path: Path) -> None:
+    path = tmp_path / "ext.wav"
+    payload = write_extensible_wav(path, seconds=0.5)
+    chunks = list(iter_wav_chunks(path, "linear16", 16000, 1))
+    assert b"".join(chunks) == payload
+    assert all(len(c) <= 5120 for c in chunks)
+
+
+def test_extensible_fallback_reader(tmp_path: Path) -> None:
+    # the manual parser used on Python versions whose wave module rejects 0xFFFE
+    path = tmp_path / "ext.wav"
+    payload = write_extensible_wav(path, seconds=0.25, sample_rate=8000, channels=2)
+    reader = _ExtensiblePcmWav(path)
+    try:
+        assert reader.getcomptype() == "NONE"
+        assert reader.getsampwidth() == 2
+        assert reader.getframerate() == 8000
+        assert reader.getnchannels() == 2
+        assert reader.getnframes() == 2000
+        assert reader.readframes(reader.getnframes()) == payload
+    finally:
+        reader.close()
+
+
+def test_extensible_wav_non_pcm16_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "float.wav"
+    write_extensible_wav(path, seconds=0.25, subformat=3, bits=32)
+    with pytest.raises(ValueError, match="16-bit PCM"):
+        read_wav_file(path)

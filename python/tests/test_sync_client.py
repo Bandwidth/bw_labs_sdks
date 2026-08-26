@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 from urllib.parse import parse_qsl, urlsplit
 
@@ -20,19 +22,10 @@ from bw_stt import (
     UnknownEvent,
 )
 
-from .conftest import ServerFactory, write_wav
+from .conftest import ServerFactory, wait_until, write_wav
 from .mocks import DOC_SEGMENTS, Script
 
 AUDIO_160MS = b"\0" * 5120
-
-
-def wait_until(condition: Callable[[], bool], timeout: float = 2.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if condition():
-            return
-        time.sleep(0.01)
-    raise AssertionError("condition not met in time")
 
 
 def test_connect_sends_header_auth_and_params(mock_server: ServerFactory, api_key_env: str) -> None:
@@ -102,14 +95,14 @@ def test_stream_chunks_frames_and_tail(mock_server: ServerFactory, api_key_env: 
     server = mock_server(script)
     client = BwSttClient(base_url=server.url)
 
-    def chunks() -> Iterator[bytes]:
-        yield b"\0" * 3000
-        yield b"\0" * 7000  # completes frame 1; the server responds with a segment
-        wait_until(lambda: server.recorder.events_sent >= 1)
-        time.sleep(0.1)  # let the client's reader take delivery before the final poll
-        yield b"\0" * 6000  # 16,000 bytes total = 500 ms
-
     with client.connect() as session:
+
+        def chunks() -> Iterator[bytes]:
+            yield b"\0" * 3000
+            yield b"\0" * 7000  # completes frame 1; the server responds with a segment
+            wait_until(lambda: session._inner._queue.qsize() >= 1)  # segment delivered
+            yield b"\0" * 6000  # 16,000 bytes total = 500 ms
+
         segments = list(session.stream_chunks(chunks()))
     assert [len(f) for f in server.recorder.frames] == [5120, 5120, 5120, 640]
     assert len(segments) == 1
@@ -249,6 +242,22 @@ def test_keepalive_disabled(mock_server: ServerFactory, api_key_env: str) -> Non
     session.close()
 
 
+def test_keepalive_zero_disables(mock_server: ServerFactory, api_key_env: str) -> None:
+    server = mock_server()
+    client = BwSttClient(base_url=server.url)
+    session = client.connect(keepalive_interval=0)
+    time.sleep(0.15)
+    assert server.recorder.keepalives == 0
+    session.close()
+
+
+def test_keepalive_negative_rejected(mock_server: ServerFactory, api_key_env: str) -> None:
+    server = mock_server()
+    client = BwSttClient(base_url=server.url)
+    with pytest.raises(ValueError, match="negative"):
+        client.connect(keepalive_interval=-1)
+
+
 def test_rate_limit_rejection(mock_server: ServerFactory, api_key_env: str) -> None:
     server = mock_server(Script(reject_status=429, reject_headers={"Retry-After": "1.5"}))
     client = BwSttClient(base_url=server.url)
@@ -278,3 +287,78 @@ def test_context_manager_closes_gracefully(mock_server: ServerFactory, api_key_e
         session.send_audio(AUDIO_160MS)
     assert not session.is_open
     assert server.recorder.audio_bytes == 5120
+
+
+def test_rate_limit_rejection_http_date(mock_server: ServerFactory, api_key_env: str) -> None:
+    when = datetime.now(timezone.utc) + timedelta(seconds=60)
+    header = format_datetime(when, usegmt=True)
+    server = mock_server(Script(reject_status=429, reject_headers={"Retry-After": header}))
+    client = BwSttClient(base_url=server.url)
+    with pytest.raises(RateLimitError) as excinfo:
+        client.connect()
+    assert excinfo.value.retry_after is not None
+    assert 50.0 <= excinfo.value.retry_after <= 60.0
+
+
+def test_connect_timeout_without_session_opened(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(Script(defer_opened=True))
+    client = BwSttClient(base_url=server.url)
+    start = time.monotonic()
+    with pytest.raises(ServiceUnavailableError, match=r"connect timed out after 0\.3s"):
+        client.connect(connect_timeout=0.3)
+    assert time.monotonic() - start < 3.0
+
+
+def test_callback_may_call_session_methods(mock_server: ServerFactory, api_key_env: str) -> None:
+    script = Script(after_open=[dict(DOC_SEGMENTS[0])], on_close=[])
+    server = mock_server(script)
+    client = BwSttClient(base_url=server.url)
+    session = client.connect()
+    seen: list[str] = []
+
+    def callback(segment: Segment) -> None:
+        session.finalize()
+        seen.append(segment.text)
+
+    session.on_segment(callback)
+    event = next(session.events())
+    assert isinstance(event, Segment)
+    assert seen == ["i need"]
+    wait_until(lambda: server.recorder.finalizes >= 1)
+    session.close()
+
+
+def test_quickstart_pattern_loses_no_segments(
+    mock_server: ServerFactory, api_key_env: str, wav_file: Path
+) -> None:
+    # the README quickstart against a server that flushes all segments after CloseStream
+    server = mock_server()
+    client = BwSttClient(base_url=server.url)
+    transcript = TranscriptAssembler()
+    with client.connect(encoding="linear16", sample_rate=16000) as session:
+        session.on_segment(transcript.push)
+        for _segment in session.stream_file(wav_file):
+            pass
+        closed = session.close_stream()
+    assert transcript.text == "i need a dry van"
+    assert closed.audio_duration_seconds == pytest.approx(0.5)
+
+
+def test_events_after_close_stream_replays_drained(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server()
+    client = BwSttClient(base_url=server.url)
+    session = client.connect()
+    seen: list[str] = []
+    session.on_segment(lambda segment: seen.append(segment.text))
+    session.send_audio(AUDIO_160MS)
+    closed = session.close_stream()
+    events = list(session.events())
+    assert [type(e).__name__ for e in events] == ["Segment", "Segment", "Segment", "SessionClosed"]
+    assert events[-1] is closed
+    assert [e.text for e in events if isinstance(e, Segment)] == ["i need", " a dr", "y van"]
+    assert seen == ["i need", " a dr", "y van"]  # dispatched once, during the drain
+    assert list(session.events()) == []

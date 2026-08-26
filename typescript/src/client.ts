@@ -1,17 +1,18 @@
-import { AuthenticationError, BwSttError } from "./errors";
+import { AuthenticationError, BwSttError, ServiceUnavailableError } from "./errors";
 import { toUint8Array } from "./framing";
 import type { AuthCarrier, ConnectOptions, TranscribeOptions } from "./options";
 import { buildListenUrl, buildTranscribeUrl, resolveAuthCarrier, resolveMediaOptions } from "./options";
 import { SttSession } from "./session";
 import type { Transcription } from "./transcribe";
 import { requestTranscription } from "./transcribe";
-import type { Transport } from "./transport";
+import type { Transport, TransportSocket } from "./transport";
 import { defaultTransport, isNode } from "./transport";
-import { parseWav } from "./wav";
+import { isPcm16, parseWav } from "./wav";
 import {
   API_KEY_ENV_VAR,
   API_KEY_HEADER,
   DEFAULT_BASE_URL,
+  DEFAULT_CONNECT_TIMEOUT_MS,
   DEFAULT_KEEPALIVE_INTERVAL_MS,
   DEFAULT_TRANSCRIBE_TIMEOUT_MS,
 } from "./wire";
@@ -46,15 +47,58 @@ export class BwSttClient {
     if (options.keepAliveIntervalMs !== undefined && options.keepAliveIntervalMs !== null && options.keepAliveIntervalMs < 0) {
       throw new RangeError("keepAliveIntervalMs must be a non-negative number or null");
     }
+    const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    if (!(connectTimeoutMs > 0)) throw new RangeError("connectTimeoutMs must be a positive number");
     const url = buildListenUrl(this.baseUrl, options, carrier === "query" ? apiKey : undefined);
     const headers = carrier === "header" ? { [API_KEY_HEADER]: apiKey } : {};
     const session = new SttSession({
       frameConfig: media,
       keepAliveIntervalMs: options.keepAliveIntervalMs === undefined ? DEFAULT_KEEPALIVE_INTERVAL_MS : options.keepAliveIntervalMs,
     });
-    const socket = await this.transport({ url, headers }, session.transportHandlers());
-    await session.attach(socket);
-    return session;
+    const timeoutError = new ServiceUnavailableError(`connect timed out after ${connectTimeoutMs} ms`);
+    let timedOut = false;
+    let socket: TransportSocket | undefined;
+    let rejectOnTimeout!: (error: Error) => void;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      rejectOnTimeout = reject;
+    });
+    timeoutPromise.catch(() => {
+      // Observed through the race below when the timer wins during socket open.
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      session.failConnect(timeoutError);
+      try {
+        socket?.close();
+      } catch {
+        // Already torn down.
+      }
+      rejectOnTimeout(timeoutError);
+    }, connectTimeoutMs);
+    (timer as { unref?: () => void }).unref?.();
+    const socketPromise = Promise.resolve(this.transport({ url, headers }, session.transportHandlers()));
+    socketPromise.then(
+      (opened) => {
+        socket = opened;
+        if (timedOut) {
+          try {
+            opened.close();
+          } catch {
+            // Never opened.
+          }
+        }
+      },
+      () => {
+        // Surfaced through the race below.
+      },
+    );
+    try {
+      socket = await Promise.race([socketPromise, timeoutPromise]);
+      await session.attach(socket);
+      return session;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /** Transcribe a complete recording in one HTTP request. */
@@ -66,6 +110,7 @@ export class BwSttClient {
       apiKey,
       body: toUint8Array(input),
       timeoutMs: options.timeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
   }
 
@@ -83,7 +128,7 @@ export class BwSttClient {
       return this.transcribe(bytes, rest);
     }
     const { info, data } = parseWav(bytes);
-    if (info.formatTag !== 1 || info.bitsPerSample !== 16) {
+    if (!isPcm16(info)) {
       throw new TypeError(`${path}: only 16-bit PCM WAV is supported; pass raw: true for headerless audio`);
     }
     if (options.encoding !== undefined && options.encoding !== "linear16") {

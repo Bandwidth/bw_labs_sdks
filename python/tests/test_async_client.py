@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -10,20 +11,34 @@ import pytest
 
 from bw_stt import (
     AsyncBwSttClient,
+    AsyncSession,
     ConnectionClosedError,
     ErrorEvent,
     RateLimitError,
     Segment,
+    ServiceUnavailableError,
     SessionClosed,
     TranscriptAssembler,
     UnknownEvent,
     WordAssembler,
 )
+from bw_stt._wire import SessionParams
 
 from .conftest import HttpServerFactory, ServerFactory
 from .mocks import DOC_SEGMENTS, Script
 
 AUDIO_160MS = b"\0" * 5120
+
+SESSION_OPENED_JSON = json.dumps(
+    {
+        "type": "SessionOpened",
+        "request_id": "req-1",
+        "model_info": {"name": "bw-streaming-en", "version": "current"},
+        "channels": 1,
+        "sample_rate": 16000,
+        "encoding": "linear16",
+    }
+)
 
 
 def test_connect_and_close_stream(mock_server: ServerFactory, api_key_env: str) -> None:
@@ -93,17 +108,18 @@ def test_async_stream_chunks(mock_server: ServerFactory, api_key_env: str) -> No
     script = Script(segments_per_frame={1: [dict(DOC_SEGMENTS[0])]})
     server = mock_server(script)
 
-    async def chunks() -> AsyncIterator[bytes]:
-        yield b"\0" * 5120  # frame 1; the server responds with a segment
-        deadline = time.monotonic() + 2.0
-        while server.recorder.events_sent < 1 and time.monotonic() < deadline:
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.1)  # let the reader take delivery before the final poll
-        yield b"\0" * 640
-
     async def scenario() -> None:
         client = AsyncBwSttClient(base_url=server.url)
         async with await client.connect() as session:
+
+            async def chunks() -> AsyncIterator[bytes]:
+                yield b"\0" * 5120  # frame 1; the server responds with a segment
+                deadline = time.monotonic() + 5.0
+                while session._queue.qsize() < 1 and time.monotonic() < deadline:
+                    await asyncio.sleep(0.01)
+                assert session._queue.qsize() >= 1  # segment delivered before the final poll
+                yield b"\0" * 640
+
             segments = [segment async for segment in session.stream_chunks(chunks())]
             assert [s.text for s in segments] == ["i need"]
 
@@ -185,6 +201,80 @@ def test_async_on_segment_awaitable_callback(mock_server: ServerFactory, api_key
 
     asyncio.run(scenario())
     assert seen == ["i need", " a dr", "y van"]
+
+
+def test_async_events_after_close_stream_replays_drained(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server()
+    seen: list[str] = []
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect()
+        session.on_segment(lambda segment: seen.append(segment.text))
+        await session.send_audio(AUDIO_160MS)
+        closed = await session.close_stream()
+        events = [event async for event in session.events()]
+        assert [type(e).__name__ for e in events] == [
+            "Segment",
+            "Segment",
+            "Segment",
+            "SessionClosed",
+        ]
+        assert events[-1] is closed
+        assert seen == ["i need", " a dr", "y van"]  # dispatched once, during the drain
+        assert [event async for event in session.events()] == []
+
+    asyncio.run(scenario())
+
+
+class _FailingSendWs:
+    """A stub connection whose handshake succeeds but whose sends fail."""
+
+    def __init__(self) -> None:
+        self._opened_sent = False
+        self._closed = asyncio.Event()
+
+    async def recv(self) -> str:
+        if not self._opened_sent:
+            self._opened_sent = True
+            return SESSION_OPENED_JSON
+        await self._closed.wait()
+        raise ConnectionError("connection is closed")
+
+    async def send(self, payload: str | bytes) -> None:
+        raise ConnectionError("send failed")
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+def test_close_stream_send_failure_still_closes() -> None:
+    async def scenario() -> None:
+        session = AsyncSession(_FailingSendWs(), SessionParams(), None)
+        await session._handshake()
+        with pytest.raises(ConnectionClosedError, match="closed while sending"):
+            await session.close_stream()
+        assert not session.is_open
+        assert session._closed
+        with pytest.raises(ConnectionClosedError):
+            await session.close_stream()
+
+    asyncio.run(scenario())
+
+
+def test_async_connect_timeout(mock_server: ServerFactory, api_key_env: str) -> None:
+    server = mock_server(Script(defer_opened=True))
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        start = time.monotonic()
+        with pytest.raises(ServiceUnavailableError, match=r"connect timed out after 0\.3s"):
+            await client.connect(connect_timeout=0.3)
+        assert time.monotonic() - start < 3.0
+
+    asyncio.run(scenario())
 
 
 def test_async_transcribe(mock_http_server: HttpServerFactory, api_key_env: str) -> None:

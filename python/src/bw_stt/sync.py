@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import weakref
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
@@ -36,10 +37,27 @@ class _EventLoopThread:
     def call(self, coro: Coroutine[Any, Any, T]) -> T:
         return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
+    async def _shutdown(self) -> None:
+        tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self._loop.shutdown_asyncgens()
+
     def stop(self) -> None:
+        if self._loop.is_closed():
+            return
+        coro = self._shutdown()
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        except RuntimeError:  # the loop closed in between
+            coro.close()
+            return
+        with contextlib.suppress(Exception):
+            future.result(timeout=5.0)
         try:
             self._loop.call_soon_threadsafe(self._loop.stop)
-        except RuntimeError:  # the loop is already closed
+        except RuntimeError:
             return
         self._thread.join(timeout=5.0)
         if not self._thread.is_alive():
@@ -50,7 +68,8 @@ class BwSttClient:
     """Client for the Bandwidth Labs speech-to-text API.
 
     The API key falls back to the ``BW_STT_API_KEY`` environment variable;
-    ``base_url`` defaults to the public endpoint.
+    ``base_url`` defaults to the public endpoint. The client can be used as
+    a context manager; leaving the block calls :meth:`close`.
     """
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
@@ -58,6 +77,7 @@ class BwSttClient:
         self.base_url = base_url or DEFAULT_BASE_URL
         self._async = AsyncBwSttClient(api_key, base_url)
         self._loop_thread: _EventLoopThread | None = None
+        self._sessions: weakref.WeakSet[Session] = weakref.WeakSet()
 
     def _runner(self) -> _EventLoopThread:
         if self._loop_thread is None:
@@ -78,12 +98,18 @@ class BwSttClient:
         redact_pii_sub: str | None = None,
         keywords: Sequence[str] | None = None,
         keepalive_interval: float | None = 25.0,
+        connect_timeout: float = 15.0,
     ) -> Session:
         """Open a streaming session and wait for its SessionOpened event.
 
         ``mode`` selects when results are emitted: ``"instant"`` (the server
         default) emits Segments as soon as text is decoded; ``"demand"``
         holds results until ``finalize()`` or ``close_stream()``.
+
+        ``keepalive_interval`` of ``None`` or ``0`` disables the automatic
+        KeepAlive timer. ``connect_timeout`` covers everything from opening
+        the socket through receiving SessionOpened; on expiry the call
+        raises :class:`ServiceUnavailableError`.
         """
         runner = self._runner()
         inner = runner.call(
@@ -99,9 +125,12 @@ class BwSttClient:
                 redact_pii_sub=redact_pii_sub,
                 keywords=keywords,
                 keepalive_interval=keepalive_interval,
+                connect_timeout=connect_timeout,
             )
         )
-        return Session(inner, runner)
+        session = Session(inner, runner, self)
+        self._sessions.add(session)
+        return session
 
     def transcribe(
         self,
@@ -144,13 +173,43 @@ class BwSttClient:
             timeout=timeout,
         )
 
+    def close(self) -> None:
+        """Close the client: abruptly close any open sessions and stop the loop thread."""
+        if self._loop_thread is None:
+            return
+        for session in list(self._sessions):
+            with contextlib.suppress(Exception):
+                session.close()
+        self._loop_thread.stop()
+        self._loop_thread = None
+
+    def __enter__(self) -> BwSttClient:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
 
 class Session:
-    """Synchronous view of one live streaming session."""
+    """Synchronous view of one live streaming session.
 
-    def __init__(self, inner: AsyncSession, runner: _EventLoopThread) -> None:
+    ``on_segment`` callbacks run on the thread that consumes results (during
+    iteration, ``events()``, or the ``close_stream()`` drain), so a callback
+    may call any Session method.
+    """
+
+    def __init__(self, inner: AsyncSession, runner: _EventLoopThread, client: BwSttClient) -> None:
         self._inner = inner
         self._runner = runner
+        # the client owns the loop thread; this reference keeps it alive for
+        # as long as any of its sessions exists
+        self._client = client
+        self._callbacks: list[Callable[[Segment], object]] = []
 
     @property
     def opened(self) -> SessionOpened:
@@ -173,10 +232,18 @@ class Session:
     def close_stream(self) -> SessionClosed:
         """End the session gracefully and return the terminal SessionClosed.
 
-        Remaining events are drained; final Segments are dispatched to
-        ``on_segment`` callbacks on the way.
+        Remaining events are drained: final Segments are dispatched to
+        ``on_segment`` callbacks on the way, and every drained event stays
+        available from :meth:`events` afterwards (yielded without a second
+        callback dispatch).
         """
-        return self._runner.call(self._inner.close_stream())
+        replay = self._inner._replay
+        drained_from = len(replay)
+        try:
+            return self._runner.call(self._inner.close_stream())
+        finally:
+            for event in list(replay)[drained_from:]:
+                self._dispatch(event)
 
     def close(self) -> None:
         """Tear the connection down without waiting for SessionClosed."""
@@ -184,21 +251,34 @@ class Session:
 
     def on_segment(self, callback: Callable[[Segment], object]) -> None:
         """Invoke ``callback`` for every Segment as events are consumed or drained."""
-        self._inner.on_segment(callback)
+        self._callbacks.append(callback)
+
+    def _dispatch(self, event: Event) -> None:
+        if isinstance(event, Segment):
+            for callback in tuple(self._callbacks):
+                callback(event)
 
     def events(self) -> Iterator[Event]:
-        """Yield events until SessionClosed; raise ConnectionClosedError on failure."""
-        iterator = self._inner.events()
+        """Yield events until SessionClosed; raise ConnectionClosedError on failure.
 
-        async def advance() -> Event:
-            return await iterator.__anext__()
-
+        Events drained by :meth:`close_stream` are yielded here afterwards,
+        so the stream is complete no matter when it is consumed. SessionOpened
+        is not part of the stream; it is available as :attr:`opened`.
+        """
+        replay = self._inner._replay
         while True:
-            try:
-                event = self._runner.call(advance())
-            except StopAsyncIteration:
+            while replay:
+                event = replay.popleft()
+                yield event
+                if isinstance(event, SessionClosed):
+                    return
+            event_or_eof = self._runner.call(self._inner._next_event())
+            if event_or_eof is None:
                 return
-            yield event
+            self._dispatch(event_or_eof)
+            yield event_or_eof
+            if isinstance(event_or_eof, SessionClosed):
+                return
 
     def stream_chunks(self, chunks: Iterable[bytes]) -> Iterator[Segment]:
         """Send audio of arbitrary chunk sizes as exact 160 ms frames.
@@ -215,11 +295,16 @@ class Session:
         for chunk in chunks:
             for frame in chunker.feed(chunk):
                 self._runner.call(self._inner._send(frame))
-            yield from self._runner.call(self._inner._poll_segments())
+            yield from self._poll_segments()
         tail = chunker.finish()
         if tail is not None:
             self._runner.call(self._inner._send(tail))
-        yield from self._runner.call(self._inner._poll_segments())
+        yield from self._poll_segments()
+
+    def _poll_segments(self) -> Iterator[Segment]:
+        for segment in self._runner.call(self._inner._poll_segments()):
+            self._dispatch(segment)
+            yield segment
 
     def stream_file(self, path: str | Path, raw: bool = False) -> Iterator[Segment]:
         """Stream a PCM16 WAV file, or any headerless file with ``raw=True``.

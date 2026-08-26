@@ -56,6 +56,7 @@ class Script:
 
     reject_status: int | None = None
     reject_headers: dict[str, str] = field(default_factory=dict)
+    defer_opened: bool = False
     after_open: list[dict[str, Any]] = field(default_factory=list)
     close_after_open_events: bool = False
     segments_per_frame: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
@@ -129,6 +130,11 @@ class MockSttServer:
 
     async def _handle(self, connection: ServerConnection) -> None:
         script, recorder = self.script, self.recorder
+        if script.defer_opened:
+            with contextlib.suppress(Exception):
+                async for _message in connection:
+                    pass
+            return
         await self._send_json(
             connection,
             {
