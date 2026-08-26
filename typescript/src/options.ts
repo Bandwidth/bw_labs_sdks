@@ -45,11 +45,15 @@ export interface ConnectOptions extends MediaOptions, FeatureOptions {
   mode?: SttMode;
   /** Send-side quiet period before an automatic KeepAlive. Default 25000; 0 or null disables. */
   keepAliveIntervalMs?: number | null;
+  /** Deadline in milliseconds from socket open through SessionOpened. Default 15000. */
+  connectTimeoutMs?: number;
 }
 
 export interface TranscribeOptions extends MediaOptions, FeatureOptions {
-  /** Whole-request deadline in milliseconds. Default 120000. */
+  /** Whole-request deadline in milliseconds, covering connection, headers, and body. Default 120000. */
   timeoutMs?: number;
+  /** Caller-side cancellation; composed with the internal timeout. */
+  signal?: AbortSignal;
 }
 
 const ENCODINGS: readonly Encoding[] = ["linear16", "mulaw", "alaw", "g722", "opus"];
@@ -90,8 +94,8 @@ export function validateKeywords(keywords: readonly string[]): void {
     throw new RangeError(`keywords accepts at most ${MAX_KEYWORDS} entries`);
   }
   for (const keyword of keywords) {
-    if (typeof keyword !== "string" || keyword.length === 0) {
-      throw new TypeError("each keyword must be a non-empty string");
+    if (typeof keyword !== "string" || keyword.trim().length === 0) {
+      throw new TypeError("each keyword must contain non-whitespace text");
     }
   }
 }
@@ -153,6 +157,8 @@ export function buildTranscribeUrl(baseUrl: string, options: TranscribeOptions):
   if (isDefaultPath(url)) url.pathname = TRANSCRIBE_PATH;
   else if (url.pathname.endsWith("/listen")) {
     url.pathname = url.pathname.slice(0, -"/listen".length) + "/transcribe";
+  } else {
+    url.pathname = url.pathname.replace(/\/$/, "") + "/transcribe";
   }
   const params = url.searchParams;
   appendMediaParams(params, resolveMediaOptions(options));

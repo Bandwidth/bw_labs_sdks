@@ -16,6 +16,7 @@ export {
   AuthenticationError,
   BwSttError,
   ConnectionClosedError,
+  InvalidRequestError,
   ProtocolError,
   RateLimitError,
   ServiceUnavailableError,

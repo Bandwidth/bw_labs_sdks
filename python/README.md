@@ -21,32 +21,45 @@ export BW_STT_API_KEY=bwa_key_...
 Synchronous:
 
 ```python
-from bw_stt import BwSttClient
+from bw_stt import BwSttClient, TranscriptAssembler
 
 client = BwSttClient()
+transcript = TranscriptAssembler()
 with client.connect(encoding="linear16", sample_rate=16000) as session:
-    for segment in session.stream_file("call.wav"):
-        print(segment.text, end="", flush=True)
+    session.on_segment(transcript.push)
+    for _segment in session.stream_file("call.wav"):
+        print("\r" + transcript.text, end="", flush=True)
     closed = session.close_stream()
-    print(f"\naudio seconds: {closed.audio_duration_seconds:.2f}")
+print("\r" + transcript.text)
+print(f"audio seconds: {closed.audio_duration_seconds:.2f}")
 ```
 
 Asynchronous:
 
 ```python
-from bw_stt import AsyncBwSttClient
+from bw_stt import AsyncBwSttClient, TranscriptAssembler
 
 client = AsyncBwSttClient()
+transcript = TranscriptAssembler()
 async with await client.connect() as session:
-    async for segment in session.stream_file("call.wav"):
-        print(segment.text, end="", flush=True)
+    session.on_segment(transcript.push)
+    async for _segment in session.stream_file("call.wav"):
+        print("\r" + transcript.text, end="", flush=True)
     closed = await session.close_stream()
-    print(f"\naudio seconds: {closed.audio_duration_seconds:.2f}")
+print("\r" + transcript.text)
+print(f"audio seconds: {closed.audio_duration_seconds:.2f}")
 ```
 
 Every segment is final. Text concatenates verbatim across segments: a segment
 whose text starts with a space begins a new word, one without a leading space
 continues the previous word. `TranscriptAssembler` applies that rule for you.
+
+Iteration over `stream_file()` yields only the segments that arrive while
+audio is still being sent; the server flushes the rest in response to
+`close_stream()`. The drain dispatches those final segments to `on_segment`
+callbacks and keeps every drained event available from `events()` afterwards,
+so assemble the transcript through a callback (as above) or by consuming
+`events()`, not from the send-side iteration alone.
 
 ## The three modes
 
@@ -114,7 +127,8 @@ session = client.connect(
 )
 ```
 
-The same options apply to `transcribe()`.
+The same options apply to `transcribe()`. The policy names shown here are
+illustrative; the supported list ships with the published API reference.
 
 ## Keyword boosting
 
@@ -129,10 +143,12 @@ result = client.transcribe("call.wav", keywords=["dry van"])
 
 Failures before the WebSocket upgrade raise typed exceptions:
 `AuthenticationError` (401/403), `RateLimitError` (429, with `retry_after`
-when the server supplies it), `ServiceUnavailableError` (5xx). In-band
-protocol errors are delivered as `ErrorEvent` values from `events()`, not
-raised; when the server closes after one, the SDK raises
-`ConnectionClosedError` carrying that event:
+when the server supplies it), `ServiceUnavailableError` (5xx and transport
+failures, including connect and transcribe timeouts). In-band protocol
+errors are delivered as `ErrorEvent` values from `events()`, not raised;
+when the server closes after one, the SDK raises `ConnectionClosedError`
+carrying that event. `events()` does not yield SessionOpened; it is
+available as `session.opened`:
 
 ```python
 from bw_stt import ConnectionClosedError, ErrorEvent, RateLimitError
@@ -157,9 +173,24 @@ Audio frames must be 20 to 1000 ms of complete samples; `stream_chunks()` and
 `stream_file()` handle the 160 ms framing for you from arbitrary chunk sizes.
 Opus is different: send exactly one raw encoder packet per `send_audio()`
 call. The SDK sends `KeepAlive` automatically during send-side quiet
-(`keepalive_interval`, default 25 s) to stay inside the 60 s idle deadline.
+(`keepalive_interval`, default 25 s) to stay inside the 60 s idle deadline;
+pass `None` or `0` to disable it. `connect()` waits up to `connect_timeout`
+seconds (default 15) for the session to open.
+
+## Overriding the endpoint
+
+`base_url` accepts `ws`, `wss`, `http`, or `https` URLs; `http(s)` is
+normalized to `ws(s)` for streaming and `ws(s)` to `http(s)` for
+`transcribe()`. A base URL without a path gets the standard paths appended
+(`/audio/v1/listen` and `/audio/v1/transcribe`); a custom path is used
+verbatim for streaming, with `/transcribe` substituted for a trailing
+`/listen` (or appended) for `transcribe()`:
+
+```python
+client = BwSttClient(base_url="wss://gateway.example.com")
+```
 
 ## API reference
 
-Full protocol documentation: see the Bandwidth Labs speech-to-text API
-reference (link to be published).
+Full protocol documentation:
+[Bandwidth Labs speech-to-text API reference](https://labs.bandwidth.com/docs/speech-to-text).

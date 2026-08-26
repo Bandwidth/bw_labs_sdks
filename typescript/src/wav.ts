@@ -1,9 +1,31 @@
 export interface WavInfo {
-  /** WAVE format tag; 1 is PCM. */
+  /** WAVE format tag; 1 is PCM, 0xFFFE is WAVE_FORMAT_EXTENSIBLE. */
   readonly formatTag: number;
   readonly channels: number;
   readonly sampleRate: number;
   readonly bitsPerSample: number;
+  /** Format code from the SubFormat GUID when formatTag is 0xFFFE and the GUID uses the standard base. */
+  readonly subFormat?: number;
+}
+
+export const WAVE_FORMAT_PCM = 0x0001;
+export const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
+
+// KSDATAFORMAT_SUBTYPE base GUID bytes after the leading format code.
+const SUBFORMAT_GUID_TAIL = [0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71];
+
+function extensibleSubFormat(fmtBody: Uint8Array): number | undefined {
+  if (fmtBody.byteLength < 40) return undefined;
+  for (let index = 0; index < SUBFORMAT_GUID_TAIL.length; index++) {
+    if (fmtBody[28 + index] !== SUBFORMAT_GUID_TAIL[index]) return undefined;
+  }
+  return readUint32(fmtBody, 24);
+}
+
+/** True for plain 16-bit PCM and for WAVE_FORMAT_EXTENSIBLE whose subformat is PCM at 16 bits. */
+export function isPcm16(info: WavInfo): boolean {
+  const format = info.formatTag === WAVE_FORMAT_EXTENSIBLE ? info.subFormat : info.formatTag;
+  return format === WAVE_FORMAT_PCM && info.bitsPerSample === 16;
 }
 
 const enum State {
@@ -69,11 +91,14 @@ export class WavReader {
             if (this.pending.byteLength < this.currentChunkSize) return output;
             const body = this.take(this.currentChunkSize);
             if (body.byteLength < 16) throw new TypeError("WAV fmt chunk is too short");
+            const formatTag = readUint16(body, 0);
+            const subFormat = formatTag === WAVE_FORMAT_EXTENSIBLE ? extensibleSubFormat(body) : undefined;
             this.wavInfo = {
-              formatTag: readUint16(body, 0),
+              formatTag,
               channels: readUint16(body, 2),
               sampleRate: readUint32(body, 4),
               bitsPerSample: readUint16(body, 14),
+              ...(subFormat !== undefined ? { subFormat } : {}),
             };
             this.state = State.ChunkHeader;
           } else {

@@ -7,6 +7,8 @@ name = "bw-stt"
 version = "0.1.0"
 description = "Python SDK for the Bandwidth Labs speech-to-text API"
 readme = "README.md"
+license = {text = "UNLICENSED"}
+authors = [{name = "Bandwidth"}]
 requires-python = ">=3.10"
 dependencies = ["websockets>=12"]
 keywords = ["speech-to-text", "stt", "transcription", "streaming", "bandwidth"]
@@ -22,6 +24,11 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Speech",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Bandwidth/bw_labs_sdks"
+Repository = "https://github.com/Bandwidth/bw_labs_sdks"
+Documentation = "https://labs.bandwidth.com/docs/speech-to-text"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bw_stt"]

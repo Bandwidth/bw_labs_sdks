@@ -16,8 +16,13 @@ PARAM_REDACT_PII = "redact_pii"
 PARAM_REDACT_PII_POLICIES = "redact_pii_policies"
 PARAM_REDACT_PII_SUB = "redact_pii_sub"
 PARAM_KEYWORDS = "keywords"
+LISTEN_PATH = "/audio/v1/listen"
+TRANSCRIBE_PATH = "/audio/v1/transcribe"
 LISTEN_PATH_SUFFIX = "/listen"
 TRANSCRIBE_PATH_SUFFIX = "/transcribe"
+
+_WS_SCHEMES = {"ws": "ws", "wss": "wss", "http": "ws", "https": "wss"}
+_HTTP_SCHEMES = {"ws": "http", "wss": "https", "http": "http", "https": "https"}
 
 MAX_KEYWORDS = 100
 
@@ -95,23 +100,38 @@ class SessionParams:
 
 
 def build_ws_url(base_url: str, params: SessionParams) -> str:
-    """Append session parameters to the WebSocket endpoint URL."""
+    """Build the listen URL: normalize the scheme to ws(s) and append parameters.
+
+    A base URL without a path (or with just "/") gets the standard listen
+    path appended; a custom path is kept verbatim.
+    """
     parts = urlsplit(base_url)
-    if parts.scheme not in ("ws", "wss"):
-        raise ValueError("base_url must use ws:// or wss://")
+    scheme = _WS_SCHEMES.get(parts.scheme)
+    if scheme is None:
+        raise ValueError("base_url must use ws, wss, http, or https")
+    path = parts.path
+    if path in ("", "/"):
+        path = LISTEN_PATH
     existing = parse_qsl(parts.query, keep_blank_values=True)
     query = urlencode(existing + params.query())
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+    return urlunsplit((scheme, parts.netloc, path, query, ""))
 
 
 def build_transcribe_url(base_url: str, params: SessionParams) -> str:
-    """Derive the HTTPS transcribe URL from the WebSocket base URL."""
+    """Build the transcribe URL: normalize the scheme to http(s) and derive the path.
+
+    A base URL without a path gets the standard transcribe path appended, a
+    path ending in /listen has that suffix replaced with /transcribe, and any
+    other custom path gets /transcribe appended.
+    """
     parts = urlsplit(base_url)
-    scheme = {"ws": "http", "wss": "https"}.get(parts.scheme)
+    scheme = _HTTP_SCHEMES.get(parts.scheme)
     if scheme is None:
-        raise ValueError("base_url must use ws:// or wss://")
+        raise ValueError("base_url must use ws, wss, http, or https")
     path = parts.path
-    if path.endswith(LISTEN_PATH_SUFFIX):
+    if path in ("", "/"):
+        path = TRANSCRIBE_PATH
+    elif path.endswith(LISTEN_PATH_SUFFIX):
         path = path[: -len(LISTEN_PATH_SUFFIX)] + TRANSCRIBE_PATH_SUFFIX
     else:
         path = path.rstrip("/") + TRANSCRIBE_PATH_SUFFIX

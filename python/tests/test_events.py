@@ -47,6 +47,7 @@ def test_parse_segment_with_leading_space() -> None:
     assert event.text.startswith(" ")
     assert [w.word for w in event.words] == ["a", "dr"]
     assert event.words[1].start == 0.36
+    assert event.raw == json.loads(payload)
 
 
 def test_parse_segment_without_words_field() -> None:

@@ -2,7 +2,7 @@
 
 TypeScript SDK for the Bandwidth Labs streaming speech-to-text API. Works in Node 18+ and in browsers.
 
-Full protocol details are in the [API reference](#) (link placeholder).
+Full protocol details are in the [API reference](https://labs.bandwidth.com/docs/speech-to-text).
 
 ## Install
 
@@ -27,6 +27,10 @@ console.log(`\naudio seconds: ${closed.audioDurationSeconds.toFixed(2)}`);
 ```
 
 In browsers, pass the key explicitly: `new BwSttClient({ apiKey })`. Browsers cannot set WebSocket headers, so the SDK automatically carries the key as an `api_key` query parameter there. In Node it uses the `X-BW-LABS-API-KEY` header. Override with `authCarrier: "header" | "query"` if needed.
+
+### Pointing at another endpoint
+
+`baseUrl` accepts `ws`, `wss`, `http`, or `https`; `http(s)` is converted to `ws(s)` for streaming and back to `http(s)` for transcribe. A baseUrl without a path gets the standard endpoint paths appended (`/audio/v1/listen`, `/audio/v1/transcribe`). A custom path is used verbatim for streaming; for transcribe, a trailing `/listen` is replaced with `/transcribe`, and any other custom path gets `/transcribe` appended.
 
 ## The three modes
 
@@ -74,7 +78,7 @@ for await (const segment of session.streamChunks(microphoneChunks)) {
 }
 ```
 
-`streamFile` (Node only) streams a 16-bit PCM WAV file whose format must match the session, or headerless audio with `{ raw: true }`.
+`streamFile` (Node only) streams a 16-bit PCM WAV file whose format must match the session, or headerless audio with `{ raw: true }`. File streaming is not paced to realtime: the file is sent as fast as the socket drains, so large files buffer according to socket drain rather than playing out at audio speed.
 
 During quiet periods the session sends `KeepAlive` automatically every 25 seconds of send-side silence, well inside the server's 60 second idle deadline. Tune with `keepAliveIntervalMs`; 0 or null disables it.
 
@@ -112,7 +116,7 @@ const session = await client.connect({
 });
 ```
 
-The same options work on `transcribe` and `transcribeFile`.
+The policy names above are illustrative; consult the API reference for the published list. The same options work on `transcribe` and `transcribeFile`.
 
 ## Keyword boosting
 
@@ -124,7 +128,7 @@ const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul
 
 ## Error handling
 
-Connection-time failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `ServiceUnavailableError` (503), and `ConnectionClosedError` for everything the transport cannot classify (browsers only expose a generic close).
+Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and timeouts. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
 
 In-band `Error` events do not throw; they arrive through `session.on("error", ...)` and `session.events()`. If the connection then drops before `SessionClosed`, pending iterators and `closeStream()` reject with a `ConnectionClosedError` whose `lastErrorEvent` carries that event.
 
@@ -145,4 +149,4 @@ Invalid local input (bad frame sizes, misaligned samples, too many keywords) thr
 
 ## Events
 
-All server events are available as a typed union via `session.events()` or `session.on("event", ...)`. Field names are camelCase mappings of the wire names (`audio_duration_seconds` becomes `audioDurationSeconds`), and every event keeps the original payload on `.raw`. Event types this SDK does not know yet are surfaced as `UnknownEvent` rather than dropped.
+All server events are available as a typed union via `session.events()` or `session.on("event", ...)`. `events()` does not yield `SessionOpened`: it is consumed by the connect handshake and available as `session.opened`. Field names are camelCase mappings of the wire names (`audio_duration_seconds` becomes `audioDurationSeconds`), and every event keeps the original payload on `.raw`. Event types this SDK does not know yet are surfaced as `UnknownEvent` rather than dropped.

@@ -3,6 +3,18 @@
   "version": "0.1.0",
   "description": "TypeScript SDK for the Bandwidth Labs streaming speech-to-text API",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bandwidth/bw_labs_sdks.git",
+    "directory": "typescript"
+  },
+  "homepage": "https://labs.bandwidth.com/docs/speech-to-text",
+  "bugs": {
+    "url": "https://github.com/Bandwidth/bw_labs_sdks/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=18"
@@ -20,7 +32,8 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -38,6 +51,7 @@
   ],
   "scripts": {
     "build": "tsup",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run"

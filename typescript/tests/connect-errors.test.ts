@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { BwSttClient } from "../src/client";
 import {
   AuthenticationError,
+  parseRetryAfter,
   ProtocolError,
   RateLimitError,
   ServiceUnavailableError,
 } from "../src/errors";
-import { MockSttServer } from "./helpers/mock-server";
+import type { Transport } from "../src/transport";
+import { MockSttServer, waitFor } from "./helpers/mock-server";
 
 const KEY = "bwa_key_test";
 const servers: MockSttServer[] = [];
@@ -52,10 +54,115 @@ describe("pre-upgrade HTTP failures", () => {
     expect((failure as RateLimitError).retryAfterSeconds).toBe(7);
   });
 
-  it("maps 503 to ServiceUnavailableError", async () => {
-    const server = await startServer({ rejectUpgrade: { status: 503 } });
+  it("maps 429 with an HTTP-date Retry-After to seconds from now", async () => {
+    const retryDate = new Date(Date.now() + 30_000).toUTCString();
+    const server = await startServer({
+      rejectUpgrade: { status: 429, headers: { "Retry-After": retryDate } },
+    });
     const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
-    await expect(client.connect()).rejects.toBeInstanceOf(ServiceUnavailableError);
+    const failure = await client.connect().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(RateLimitError);
+    const seconds = (failure as RateLimitError).retryAfterSeconds;
+    expect(seconds).toBeGreaterThanOrEqual(25);
+    expect(seconds).toBeLessThanOrEqual(30);
+  });
+
+  it("maps 5xx to ServiceUnavailableError", async () => {
+    for (const status of [500, 503]) {
+      const server = await startServer({ rejectUpgrade: { status } });
+      const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+      await expect(client.connect()).rejects.toBeInstanceOf(ServiceUnavailableError);
+    }
+  });
+});
+
+describe("connect timeout", () => {
+  it("rejects with ServiceUnavailableError when SessionOpened never arrives", async () => {
+    const server = await startServer({ omitSessionOpened: true });
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const started = Date.now();
+    const failure = await client.connect({ connectTimeoutMs: 80 }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(ServiceUnavailableError);
+    expect((failure as Error).message).toContain("timed out");
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("reaps the socket and never starts keepalive on timeout", async () => {
+    let closes = 0;
+    const sent: (string | Uint8Array)[] = [];
+    const transport: Transport = () =>
+      Promise.resolve({
+        send: (data) => {
+          sent.push(data);
+        },
+        close: () => {
+          closes += 1;
+        },
+      });
+    const client = new BwSttClient({ apiKey: KEY, transport });
+    await expect(client.connect({ connectTimeoutMs: 40, keepAliveIntervalMs: 10 })).rejects.toBeInstanceOf(
+      ServiceUnavailableError,
+    );
+    expect(closes).toBeGreaterThan(0);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(sent.filter((data) => typeof data === "string" && data.includes("KeepAlive"))).toHaveLength(0);
+  });
+
+  it("fires during socket open and closes a socket that arrives late", async () => {
+    let closed = false;
+    const transport: Transport = () =>
+      new Promise((resolve) =>
+        setTimeout(
+          () =>
+            resolve({
+              send: () => {},
+              close: () => {
+                closed = true;
+              },
+            }),
+          120,
+        ),
+      );
+    const client = new BwSttClient({ apiKey: KEY, transport });
+    const started = Date.now();
+    await expect(client.connect({ connectTimeoutMs: 30 })).rejects.toBeInstanceOf(ServiceUnavailableError);
+    expect(Date.now() - started).toBeLessThan(110);
+    await waitFor(() => closed);
+  });
+
+  it("rejects a non-positive connectTimeoutMs", async () => {
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: "ws://127.0.0.1:1" });
+    await expect(client.connect({ connectTimeoutMs: 0 })).rejects.toThrow(RangeError);
+    await expect(client.connect({ connectTimeoutMs: -5 })).rejects.toThrow(RangeError);
+  });
+});
+
+describe("parseRetryAfter", () => {
+  it("parses delta-seconds", () => {
+    expect(parseRetryAfter("7")).toBe(7);
+    expect(parseRetryAfter("0")).toBe(0);
+  });
+
+  it("parses an HTTP-date as seconds from now", () => {
+    const seconds = parseRetryAfter(new Date(Date.now() + 30_000).toUTCString());
+    expect(seconds).toBeGreaterThanOrEqual(25);
+    expect(seconds).toBeLessThanOrEqual(30);
+  });
+
+  it("floors past HTTP-dates at zero", () => {
+    expect(parseRetryAfter(new Date(Date.now() - 30_000).toUTCString())).toBe(0);
+  });
+
+  it("returns undefined for unparseable values", () => {
+    expect(parseRetryAfter("soon")).toBeUndefined();
+    expect(parseRetryAfter("")).toBeUndefined();
+    expect(parseRetryAfter(null)).toBeUndefined();
   });
 });
 

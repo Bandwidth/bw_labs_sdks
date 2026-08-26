@@ -16,11 +16,15 @@ export class AuthenticationError extends BwSttError {
   }
 }
 
-/** Parse a numeric Retry-After header value into seconds. */
+/** Parse a Retry-After header value (delta-seconds or HTTP-date) into seconds. */
 export function parseRetryAfter(value: string | null | undefined): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const seconds = Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds : undefined;
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds : undefined;
+  const dateMs = new Date(value).getTime();
+  if (Number.isNaN(dateMs)) return undefined;
+  const deltaMs = dateMs - Date.now();
+  return deltaMs <= 0 ? 0 : Math.ceil(deltaMs / 1000);
 }
 
 /** The connection was refused with HTTP 429. */
@@ -35,9 +39,20 @@ export class RateLimitError extends BwSttError {
   }
 }
 
-/** The connection was refused with HTTP 503. */
+/** The service failed with HTTP 5xx, or the request failed at the transport level (network failure, timeout). */
 export class ServiceUnavailableError extends BwSttError {
   override name = "ServiceUnavailableError";
+}
+
+/** The server rejected the request as invalid (HTTP 400, 413, or another unexpected 4xx). */
+export class InvalidRequestError extends BwSttError {
+  override name = "InvalidRequestError";
+  readonly status?: number;
+
+  constructor(message: string, status?: number) {
+    super(message);
+    if (status !== undefined) this.status = status;
+  }
 }
 
 /** The WebSocket closed before the session completed gracefully. */

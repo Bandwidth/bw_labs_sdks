@@ -98,9 +98,12 @@ def test_param_validation(kwargs: dict[str, object]) -> None:
         SessionParams(**kwargs)  # type: ignore[arg-type]
 
 
-def test_base_url_scheme_required() -> None:
-    with pytest.raises(ValueError, match="ws://"):
-        build_ws_url("https://api.labs.bandwidth.com/audio/v1/listen", SessionParams())
+@pytest.mark.parametrize("base_url", ["ftp://host/x", "host/x", "file:///x"])
+def test_base_url_scheme_required(base_url: str) -> None:
+    with pytest.raises(ValueError, match="ws, wss, http, or https"):
+        build_ws_url(base_url, SessionParams())
+    with pytest.raises(ValueError, match="ws, wss, http, or https"):
+        build_transcribe_url(base_url, SessionParams())
 
 
 def test_base_url_existing_query_preserved() -> None:
@@ -110,14 +113,45 @@ def test_base_url_existing_query_preserved() -> None:
     assert query["encoding"] == "linear16"
 
 
-def test_transcribe_url_derivation() -> None:
-    url = build_transcribe_url(BASE, SessionParams())
-    parts = urlsplit(url)
-    assert parts.scheme == "https"
-    assert parts.path == "/audio/v1/transcribe"
-    assert dict(query_of(url))["encoding"] == "linear16"
+@pytest.mark.parametrize(
+    ("base_url", "scheme", "path"),
+    [
+        ("wss://host/audio/v1/listen", "wss", "/audio/v1/listen"),
+        ("ws://host/audio/v1/listen", "ws", "/audio/v1/listen"),
+        ("https://host/audio/v1/listen", "wss", "/audio/v1/listen"),
+        ("http://host/audio/v1/listen", "ws", "/audio/v1/listen"),
+        ("wss://host", "wss", "/audio/v1/listen"),
+        ("https://host/", "wss", "/audio/v1/listen"),
+        ("wss://host/custom/path", "wss", "/custom/path"),
+        ("https://host/custom/listen", "wss", "/custom/listen"),
+    ],
+)
+def test_listen_url_normalization(base_url: str, scheme: str, path: str) -> None:
+    parts = urlsplit(build_ws_url(base_url, SessionParams()))
+    assert parts.scheme == scheme
+    assert parts.path == path
 
-    url = build_transcribe_url("ws://127.0.0.1:9999", SessionParams())
-    parts = urlsplit(url)
-    assert parts.scheme == "http"
-    assert parts.path == "/transcribe"
+
+@pytest.mark.parametrize(
+    ("base_url", "scheme", "path"),
+    [
+        ("wss://host/audio/v1/listen", "https", "/audio/v1/transcribe"),
+        ("ws://host/audio/v1/listen", "http", "/audio/v1/transcribe"),
+        ("https://host/audio/v1/listen", "https", "/audio/v1/transcribe"),
+        ("http://host/audio/v1/listen", "http", "/audio/v1/transcribe"),
+        ("wss://host", "https", "/audio/v1/transcribe"),
+        ("http://host/", "http", "/audio/v1/transcribe"),
+        ("wss://host/custom/path", "https", "/custom/path/transcribe"),
+        ("wss://host/custom/path/", "https", "/custom/path/transcribe"),
+        ("https://host/gateway/listen", "https", "/gateway/transcribe"),
+    ],
+)
+def test_transcribe_url_normalization(base_url: str, scheme: str, path: str) -> None:
+    parts = urlsplit(build_transcribe_url(base_url, SessionParams()))
+    assert parts.scheme == scheme
+    assert parts.path == path
+
+
+def test_transcribe_url_carries_params() -> None:
+    url = build_transcribe_url(BASE, SessionParams())
+    assert dict(query_of(url))["encoding"] == "linear16"

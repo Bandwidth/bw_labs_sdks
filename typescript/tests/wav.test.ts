@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseWav, WavReader } from "../src/wav";
+import { isPcm16, parseWav, WavReader } from "../src/wav";
 import { buildWav, pcmBytes } from "./helpers/audio";
 
 function withPayload(container: Uint8Array, payload: Uint8Array): Uint8Array {
@@ -63,5 +63,34 @@ describe("parseWav", () => {
     const { info, data } = parseWav(file);
     expect(info).toEqual({ formatTag: 1, channels: 1, sampleRate: 16000, bitsPerSample: 16 });
     expect(data).toEqual(payload);
+  });
+});
+
+describe("WAVE_FORMAT_EXTENSIBLE", () => {
+  it("parses the PCM subformat from the GUID", () => {
+    const payload = pcmBytes(640);
+    const file = withPayload(
+      buildWav({ sampleRate: 16000, channels: 1, samplesPerChannel: 320, extensibleSubFormat: 1 }),
+      payload,
+    );
+    const { info, data } = parseWav(file);
+    expect(info.formatTag).toBe(0xfffe);
+    expect(info.subFormat).toBe(1);
+    expect(isPcm16(info)).toBe(true);
+    expect(data).toEqual(payload);
+  });
+
+  it("is not PCM16 when the subformat is IEEE float", () => {
+    const file = buildWav({ sampleRate: 16000, channels: 1, samplesPerChannel: 320, extensibleSubFormat: 3 });
+    const { info } = parseWav(file);
+    expect(info.subFormat).toBe(3);
+    expect(isPcm16(info)).toBe(false);
+  });
+
+  it("is not PCM16 for a plain extensible tag without a readable GUID", () => {
+    const file = buildWav({ sampleRate: 16000, channels: 1, samplesPerChannel: 320, formatTag: 0xfffe });
+    const { info } = parseWav(file);
+    expect(info.subFormat).toBeUndefined();
+    expect(isPcm16(info)).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import os
 import time
+from collections import deque
 from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
 from pathlib import Path
 from types import TracebackType
@@ -50,7 +51,11 @@ _EOF = object()
 
 
 def _resolve_api_key(explicit: str | None) -> str:
-    api_key = explicit or os.environ.get(API_KEY_ENV)
+    if explicit is not None:
+        if not explicit:
+            raise AuthenticationError("api_key must not be empty")
+        return explicit
+    api_key = os.environ.get(API_KEY_ENV)
     if not api_key:
         raise AuthenticationError(f"no API key: pass api_key or set {API_KEY_ENV}")
     return api_key
@@ -73,14 +78,8 @@ def _map_rejected_upgrade(exc: Exception) -> BwSttError | None:
     if status in (401, 403):
         return AuthenticationError(f"API key rejected (HTTP {status})")
     if status == 429:
-        retry_after: float | None = None
         value = headers.get("Retry-After") if headers is not None else None
-        if value is not None:
-            try:
-                retry_after = float(value)
-            except ValueError:
-                retry_after = None
-        return RateLimitError("rate limited (HTTP 429)", retry_after=retry_after)
+        return RateLimitError("rate limited (HTTP 429)", retry_after=_http.parse_retry_after(value))
     if status is not None and status >= 500:
         return ServiceUnavailableError(f"service unavailable (HTTP {status})")
     return None
@@ -95,7 +94,8 @@ async def _open_websocket(url: str, api_key: str) -> Any:
     signature_error: TypeError | None = None
     # websockets renamed the handshake-header argument in version 14
     for header_arg in ("additional_headers", "extra_headers"):
-        kwargs: dict[str, Any] = {header_arg: headers}
+        # the caller's connect_timeout governs the whole open, not websockets' own
+        kwargs: dict[str, Any] = {header_arg: headers, "open_timeout": None}
         try:
             return await connect(url, **kwargs)
         except TypeError as exc:
@@ -142,16 +142,24 @@ class AsyncBwSttClient:
         redact_pii_sub: str | None = None,
         keywords: Sequence[str] | None = None,
         keepalive_interval: float | None = 25.0,
+        connect_timeout: float = 15.0,
     ) -> AsyncSession:
         """Open a streaming session and wait for its SessionOpened event.
 
         ``mode`` selects when results are emitted: ``"instant"`` (the server
         default) emits Segments as soon as text is decoded; ``"demand"``
         holds results until ``finalize()`` or ``close_stream()``.
+
+        ``keepalive_interval`` of ``None`` or ``0`` disables the automatic
+        KeepAlive timer. ``connect_timeout`` covers everything from opening
+        the socket through receiving SessionOpened; on expiry the call
+        raises :class:`ServiceUnavailableError`.
         """
         api_key = _resolve_api_key(self.api_key)
-        if keepalive_interval is not None and keepalive_interval <= 0:
-            raise ValueError("keepalive_interval must be positive or None")
+        if keepalive_interval is not None and keepalive_interval < 0:
+            raise ValueError("keepalive_interval must not be negative")
+        if connect_timeout <= 0:
+            raise ValueError("connect_timeout must be positive")
         params = SessionParams(
             encoding=encoding,
             sample_rate=sample_rate,
@@ -164,6 +172,17 @@ class AsyncBwSttClient:
             redact_pii_sub=redact_pii_sub,
             keywords=keywords,
         )
+        try:
+            return await asyncio.wait_for(
+                self._open_session(params, api_key, keepalive_interval or None),
+                connect_timeout,
+            )
+        except asyncio.TimeoutError:
+            raise ServiceUnavailableError(f"connect timed out after {connect_timeout:g}s") from None
+
+    async def _open_session(
+        self, params: SessionParams, api_key: str, keepalive_interval: float | None
+    ) -> AsyncSession:
         ws = await _open_websocket(build_ws_url(self.base_url, params), api_key)
         session = AsyncSession(ws, params, keepalive_interval)
         try:
@@ -224,6 +243,7 @@ class AsyncSession:
         self._params = params
         self._keepalive_interval = keepalive_interval
         self._queue: asyncio.Queue[object] = asyncio.Queue()
+        self._replay: deque[Event] = deque()
         self._send_lock = asyncio.Lock()
         self._callbacks: list[SegmentCallback] = []
         self._last_send = time.monotonic()
@@ -338,19 +358,24 @@ class AsyncSession:
     async def close_stream(self) -> SessionClosed:
         """End the session gracefully and return the terminal SessionClosed.
 
-        Remaining events are drained; final Segments are dispatched to
-        ``on_segment`` callbacks on the way.
+        Remaining events are drained: final Segments are dispatched to
+        ``on_segment`` callbacks on the way, and every drained event stays
+        available from :meth:`events` afterwards (yielded without a second
+        callback dispatch).
         """
         if self._session_closed is not None:
             await self.close()
             return self._session_closed
-        if not self._close_sent:
-            self._close_sent = True
-            await self._send(CLOSE_STREAM_JSON)
         try:
+            if not self._close_sent:
+                self._close_sent = True
+                await self._send(CLOSE_STREAM_JSON)
             while True:
                 event = await self._next_event()
-                if event is None or isinstance(event, SessionClosed):
+                if event is None:
+                    break
+                self._replay.append(event)
+                if isinstance(event, SessionClosed):
                     break
         finally:
             await self.close()
@@ -385,8 +410,18 @@ class AsyncSession:
         self._callbacks.append(callback)
 
     async def events(self) -> AsyncIterator[Event]:
-        """Yield events until SessionClosed; raise ConnectionClosedError on failure."""
+        """Yield events until SessionClosed; raise ConnectionClosedError on failure.
+
+        Events drained by :meth:`close_stream` are yielded here afterwards,
+        so the stream is complete no matter when it is consumed. SessionOpened
+        is not part of the stream; it is available as :attr:`opened`.
+        """
         while True:
+            while self._replay:
+                replayed = self._replay.popleft()
+                yield replayed
+                if isinstance(replayed, SessionClosed):
+                    return
             event = await self._next_event()
             if event is None:
                 return
