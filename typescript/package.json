@@ -54,7 +54,8 @@
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "ws": "^8.18.0"
