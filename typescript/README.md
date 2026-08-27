@@ -6,8 +6,13 @@ Full protocol details are in the [API reference](https://labs.bandwidth.com/docs
 
 ## Install
 
+During the beta, install from a clone of this repository. The package builds
+its dist on install via the prepare script.
+
 ```sh
-npm install @bandwidth/bw-stt
+git clone https://github.com/Bandwidth/bw_labs_sdks.git
+cd bw_labs_sdks/typescript && npm install && cd -
+npm install ./bw_labs_sdks/typescript
 ```
 
 ## Quickstart
