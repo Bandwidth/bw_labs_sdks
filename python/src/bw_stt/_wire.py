@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 DEFAULT_BASE_URL = "wss://api.labs.bandwidth.com/audio/v1/listen"
 API_KEY_ENV = "BW_STT_API_KEY"
 API_KEY_HEADER = "X-BW-LABS-API-KEY"
 
-# Provisional wire names for PII redaction, keyword boosting, and the offline
-# transcribe route; the serving contract may still adjust them.
+# Wire names and offline media rules confirmed against the sidecar transcribe
+# contract. Keep SDK-to-wire mapping in this module.
 PARAM_REDACT_PII = "redact_pii"
 PARAM_REDACT_PII_POLICIES = "redact_pii_policies"
 PARAM_REDACT_PII_SUB = "redact_pii_sub"
@@ -20,6 +21,10 @@ LISTEN_PATH = "/audio/v1/listen"
 TRANSCRIBE_PATH = "/audio/v1/transcribe"
 LISTEN_PATH_SUFFIX = "/listen"
 TRANSCRIBE_PATH_SUFFIX = "/transcribe"
+TRANSCRIBE_WAV_CONTENT_TYPE = "audio/wav"
+TRANSCRIBE_RAW_CONTENT_TYPE = "application/octet-stream"
+TRANSCRIBE_RAW_ENCODING = "linear16"
+TRANSCRIBE_MAX_AUDIO_DESCRIPTION = "five minutes"
 
 _WS_SCHEMES = {"ws": "ws", "wss": "wss", "http": "ws", "https": "wss"}
 _HTTP_SCHEMES = {"ws": "http", "wss": "https", "http": "http", "https": "https"}
@@ -43,7 +48,7 @@ class SessionParams:
     channels: int = 1
     multichannel: bool = False
     model: str | None = None
-    mode: str | None = None
+    mode: Literal["instant", "demand"] | None = None
     redact_pii: bool = False
     redact_pii_policies: Sequence[str] | None = None
     redact_pii_sub: str | None = None
@@ -65,8 +70,8 @@ class SessionParams:
                 raise ValueError(f"{self.encoding} requires channels=1")
         if self.model is not None and not self.model:
             raise ValueError("model must be a non-empty string")
-        if self.mode is not None and not self.mode:
-            raise ValueError("mode must be a non-empty string")
+        if self.mode is not None and self.mode not in ("instant", "demand"):
+            raise ValueError("mode must be instant or demand")
         if self.redact_pii_sub is not None and not self.redact_pii_sub:
             raise ValueError("redact_pii_sub must be a non-empty string")
         if self.keywords is not None:
@@ -76,17 +81,25 @@ class SessionParams:
                 if not isinstance(keyword, str) or not keyword.strip():
                     raise ValueError("keywords must be non-empty strings")
 
-    def query(self) -> list[tuple[str, str]]:
-        pairs = [
-            ("encoding", self.encoding),
-            ("sample_rate", str(self.sample_rate)),
-            ("channels", str(self.channels)),
-        ]
-        if self.multichannel:
+    def query(self, *, transcribe_raw: bool | None = None) -> list[tuple[str, str]]:
+        """Return query parameters for listen or the confirmed transcribe contract.
+
+        ``None`` selects the listen surface. For transcribe, ``True`` selects
+        raw linear16 and ``False`` selects a WAV body. Raw-only format fields
+        and the streaming-only mode/multichannel fields never cross the HTTP
+        boundary.
+        """
+        if transcribe_raw and self.encoding != TRANSCRIBE_RAW_ENCODING:
+            raise ValueError("raw transcribe uploads require encoding='linear16'")
+        pairs: list[tuple[str, str]] = []
+        if transcribe_raw is None or transcribe_raw:
+            pairs.extend([("encoding", self.encoding), ("sample_rate", str(self.sample_rate))])
+        pairs.append(("channels", str(self.channels)))
+        if transcribe_raw is None and self.multichannel:
             pairs.append(("multichannel", "true"))
         if self.model is not None:
             pairs.append(("model", self.model))
-        if self.mode is not None:
+        if transcribe_raw is None and self.mode is not None:
             pairs.append(("mode", self.mode))
         if self.redact_pii:
             pairs.append((PARAM_REDACT_PII, "true"))
@@ -117,7 +130,7 @@ def build_ws_url(base_url: str, params: SessionParams) -> str:
     return urlunsplit((scheme, parts.netloc, path, query, ""))
 
 
-def build_transcribe_url(base_url: str, params: SessionParams) -> str:
+def build_transcribe_url(base_url: str, params: SessionParams, *, raw_input: bool = True) -> str:
     """Build the transcribe URL: normalize the scheme to http(s) and derive the path.
 
     A base URL without a path gets the standard transcribe path appended, a
@@ -136,5 +149,5 @@ def build_transcribe_url(base_url: str, params: SessionParams) -> str:
     else:
         path = path.rstrip("/") + TRANSCRIBE_PATH_SUFFIX
     existing = parse_qsl(parts.query, keep_blank_values=True)
-    query = urlencode(existing + params.query())
+    query = urlencode(existing + params.query(transcribe_raw=raw_input))
     return urlunsplit((scheme, parts.netloc, path, query, ""))

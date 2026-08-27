@@ -7,17 +7,29 @@ import {
   ServiceUnavailableError,
 } from "./errors";
 import type { Word } from "./events";
-import { API_KEY_HEADER, TRANSCRIBE_MAX_AUDIO_MINUTES } from "./wire";
+import {
+  API_KEY_HEADER,
+  TRANSCRIBE_MAX_AUDIO_DESCRIPTION,
+} from "./wire";
+import type { TRANSCRIBE_RAW_CONTENT_TYPE, TRANSCRIBE_WAV_CONTENT_TYPE } from "./wire";
+
+export interface TranscriptionSegment {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
 
 /**
  * Result of an offline transcription. Wire mapping: `request_id` -> requestId,
- * `audio_duration_seconds` -> audioDurationSeconds. `raw` preserves the full
- * response body for fields this SDK version does not model.
+ * `audio_duration_seconds` -> audioDurationSeconds. `words` may be empty.
+ * `raw` preserves the full response body for fields this SDK version does not
+ * model.
  */
 export interface Transcription {
   readonly requestId: string;
   readonly text: string;
   readonly words: readonly Word[];
+  readonly segments: readonly TranscriptionSegment[];
   readonly audioDurationSeconds: number;
   readonly raw: Record<string, unknown>;
 }
@@ -26,6 +38,7 @@ export interface TranscribeRequest {
   url: string;
   apiKey: string;
   body: Uint8Array;
+  contentType: typeof TRANSCRIBE_RAW_CONTENT_TYPE | typeof TRANSCRIBE_WAV_CONTENT_TYPE;
   timeoutMs: number;
   signal?: AbortSignal;
 }
@@ -61,7 +74,7 @@ export async function requestTranscription(request: TranscribeRequest): Promise<
         method: "POST",
         headers: {
           [API_KEY_HEADER]: request.apiKey,
-          "Content-Type": "application/octet-stream",
+          "Content-Type": request.contentType,
         },
         body: request.body,
         signal: composeSignals(controller.signal, request.signal),
@@ -101,7 +114,7 @@ async function mapHttpFailure(response: Response): Promise<Error> {
   }
   if (status === 413) {
     return new InvalidRequestError(
-      `audio exceeds the transcribe limit of ${TRANSCRIBE_MAX_AUDIO_MINUTES} minutes (HTTP 413)`,
+      `audio exceeds the transcribe limit of ${TRANSCRIBE_MAX_AUDIO_DESCRIPTION} (HTTP 413)`,
       status,
     );
   }
@@ -137,10 +150,25 @@ function parseTranscription(payload: unknown): Transcription {
     }
     return { word: word.word, start: word.start, end: word.end };
   });
+  const rawSegments = raw.segments ?? [];
+  if (!Array.isArray(rawSegments)) {
+    throw new ProtocolError("transcribe response segments is not an array");
+  }
+  const segments: TranscriptionSegment[] = rawSegments.map((entry, index) => {
+    if (entry === null || typeof entry !== "object") {
+      throw new ProtocolError(`transcribe response segments[${index}] is not an object`);
+    }
+    const segment = entry as Record<string, unknown>;
+    if (typeof segment.start !== "number" || typeof segment.end !== "number" || typeof segment.text !== "string") {
+      throw new ProtocolError(`transcribe response segments[${index}] is malformed`);
+    }
+    return { start: segment.start, end: segment.end, text: segment.text };
+  });
   return {
     requestId: raw.request_id,
     text: raw.text,
     words,
+    segments,
     audioDurationSeconds: raw.audio_duration_seconds,
     raw,
   };

@@ -11,7 +11,15 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 from ._framing import read_wav_file
-from ._wire import API_KEY_HEADER, SessionParams, build_transcribe_url
+from ._wire import (
+    API_KEY_HEADER,
+    TRANSCRIBE_MAX_AUDIO_DESCRIPTION,
+    TRANSCRIBE_RAW_CONTENT_TYPE,
+    TRANSCRIBE_RAW_ENCODING,
+    TRANSCRIBE_WAV_CONTENT_TYPE,
+    SessionParams,
+    build_transcribe_url,
+)
 from .errors import (
     AuthenticationError,
     BwSttError,
@@ -30,7 +38,6 @@ def transcribe(
     encoding: str,
     sample_rate: int,
     channels: int,
-    multichannel: bool,
     model: str | None,
     redact_pii: bool,
     redact_pii_policies: Sequence[str] | None,
@@ -41,40 +48,57 @@ def transcribe(
 ) -> Transcription:
     if timeout <= 0:
         raise ValueError("timeout must be positive")
-    if isinstance(audio, (str, Path)):
-        if raw:
-            data = Path(audio).read_bytes()
-        else:
-            if encoding != "linear16":
-                raise ValueError(
-                    "WAV input requires encoding='linear16'; pass raw=True to send "
-                    "pre-encoded audio bytes"
-                )
-            data, sample_rate, channels = read_wav_file(audio)
+    raw_input = True
+    if isinstance(audio, str | Path) and not raw:
+        if encoding != TRANSCRIBE_RAW_ENCODING:
+            raise ValueError(
+                "WAV input requires encoding='linear16'; pass raw=True to send "
+                "headerless linear16 audio bytes"
+            )
+        data = Path(audio).read_bytes()
+        _, wav_sample_rate, wav_channels = read_wav_file(audio)
+        if sample_rate != 16000 and sample_rate != wav_sample_rate:
+            raise ValueError(
+                f"WAV input is {wav_sample_rate} Hz, the request specifies {sample_rate} Hz"
+            )
+        if channels != 1 and channels != wav_channels:
+            raise ValueError(
+                f"WAV input has {wav_channels} channel(s), the request specifies {channels}"
+            )
+        sample_rate, channels = wav_sample_rate, wav_channels
+        raw_input = False
     else:
-        data = bytes(audio)
+        data = Path(audio).read_bytes() if isinstance(audio, str | Path) else bytes(audio)
+        if encoding != TRANSCRIBE_RAW_ENCODING:
+            raise ValueError("raw transcribe uploads require encoding='linear16'")
     if not data:
         raise ValueError("no audio to transcribe")
     params = SessionParams(
         encoding=encoding,
         sample_rate=sample_rate,
         channels=channels,
-        multichannel=multichannel,
         model=model,
         redact_pii=redact_pii,
         redact_pii_policies=redact_pii_policies,
         redact_pii_sub=redact_pii_sub,
         keywords=keywords,
     )
-    return _post(build_transcribe_url(base_url, params), api_key, data, timeout)
+    content_type = TRANSCRIBE_RAW_CONTENT_TYPE if raw_input else TRANSCRIBE_WAV_CONTENT_TYPE
+    return _post(
+        build_transcribe_url(base_url, params, raw_input=raw_input),
+        api_key,
+        data,
+        content_type,
+        timeout,
+    )
 
 
-def _post(url: str, api_key: str, data: bytes, timeout: float) -> Transcription:
+def _post(url: str, api_key: str, data: bytes, content_type: str, timeout: float) -> Transcription:
     request = urllib.request.Request(
         url,
         data=data,
         method="POST",
-        headers={API_KEY_HEADER: api_key, "Content-Type": "application/octet-stream"},
+        headers={API_KEY_HEADER: api_key, "Content-Type": content_type},
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -141,7 +165,8 @@ def _map_http_error(exc: urllib.error.HTTPError) -> BwSttError:
         return InvalidRequestError(f"invalid transcribe request (HTTP 400){_error_detail(exc)}")
     if status == 413:
         return InvalidRequestError(
-            "audio too large (HTTP 413); transcribe accepts up to about 5 minutes of audio"
+            "audio too large (HTTP 413); transcribe accepts up to "
+            f"{TRANSCRIBE_MAX_AUDIO_DESCRIPTION} of audio"
         )
     if status >= 500:
         return ServiceUnavailableError(f"service unavailable (HTTP {status})")

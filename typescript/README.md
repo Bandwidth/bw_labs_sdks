@@ -32,7 +32,11 @@ In browsers, pass the key explicitly: `new BwSttClient({ apiKey })`. Browsers ca
 
 `baseUrl` accepts `ws`, `wss`, `http`, or `https`; `http(s)` is converted to `ws(s)` for streaming and back to `http(s)` for transcribe. A baseUrl without a path gets the standard endpoint paths appended (`/audio/v1/listen`, `/audio/v1/transcribe`). A custom path is used verbatim for streaming; for transcribe, a trailing `/listen` is replaced with `/transcribe`, and any other custom path gets `/transcribe` appended.
 
-## The three modes
+## Listen modes and offline transcribe
+
+Instant and demand are modes of the `/audio/v1/listen` WebSocket endpoint.
+Offline transcription uses `POST /audio/v1/transcribe` over HTTP and is not a
+WebSocket session mode.
 
 ### Instant
 
@@ -54,17 +58,45 @@ session.finalize();             // results for audio so far arrive as Segment ev
 const closed = await session.closeStream(); // flushes the rest, then SessionClosed
 ```
 
-### Transcribe
+### Offline transcribe
 
-Offline transcription of a complete recording (up to 5 minutes) in one HTTP call. No session to manage.
+Offline transcription of a complete recording (up to five minutes) in one HTTP
+call. No session to manage.
 
 ```ts
 const result = await client.transcribeFile("call.wav");
 console.log(result.text, result.audioDurationSeconds);
 
 // or from bytes you already have:
-const result2 = await client.transcribe(audioBytes, { encoding: "mulaw", sampleRate: 8000 });
+const result2 = await client.transcribe(rawLinear16, { encoding: "linear16", sampleRate: 16000 });
 ```
+
+`transcribeFile` uploads a WAV path as `audio/wav`, preserving its container
+and using the header's sample rate and channel count. `transcribe` and
+`transcribeFile(..., { raw: true })` upload headerless linear16 bytes as
+`application/octet-stream` with `encoding=linear16` and `sample_rate`; channels
+may be 1 or 2, with 2 selecting downmix.
+
+A successful response has this shape:
+
+```json
+{
+  "request_id": "6f58c1c6-7e0c-4bb8-9d72-3fb3d4c5c1aa",
+  "text": "i need a dry van",
+  "words": [
+    {"word": "i", "start": 0.00, "end": 0.12},
+    {"word": "need", "start": 0.16, "end": 0.20}
+  ],
+  "segments": [
+    {"start": 0.00, "end": 0.72, "text": "i need a dry van"}
+  ],
+  "audio_duration_seconds": 0.72,
+  "model_info": {"name": "bw-streaming-en", "version": "current"}
+}
+```
+
+`words` is a timestamped word list and may be empty. `segments` is a typed
+list with `start`, `end`, and `text` fields.
 
 ## Streaming audio
 

@@ -100,14 +100,35 @@ def test_parse_transcription() -> None:
         "request_id": "req-t",
         "text": "hello",
         "words": [{"word": "hello", "start": 0.0, "end": 0.4}],
+        "segments": [{"start": 0.0, "end": 0.4, "text": "hello"}],
         "audio_duration_seconds": 0.5,
         "pii_entities": [{"kind": "ssn"}],
     }
     result = parse_transcription(json.dumps(payload))
     assert result.text == "hello"
     assert result.words[0].word == "hello"
+    assert result.segments[0].text == "hello"
+    assert result.segments[0].start == 0.0
+    assert result.segments[0].end == 0.4
     assert result.audio_duration_seconds == 0.5
     assert result.raw["pii_entities"] == [{"kind": "ssn"}]
+
+
+def test_parse_transcription_allows_empty_words() -> None:
+    result = parse_transcription(
+        json.dumps(
+            {
+                "request_id": "req-t",
+                "text": "hello",
+                "words": [],
+                "segments": [{"start": 0.0, "end": 0.4, "text": "hello"}],
+                "audio_duration_seconds": 0.5,
+                "model_info": {"name": "bw-streaming-en", "version": "current"},
+            }
+        )
+    )
+    assert result.words == ()
+    assert result.segments[0].text == "hello"
 
 
 def test_parse_transcription_malformed() -> None:

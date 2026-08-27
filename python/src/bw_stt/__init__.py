@@ -17,6 +17,7 @@ from .events import (
     SessionClosed,
     SessionOpened,
     Transcription,
+    TranscriptionSegment,
     UnknownEvent,
     Word,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "SessionOpened",
     "TranscriptAssembler",
     "Transcription",
+    "TranscriptionSegment",
     "UnknownEvent",
     "Word",
     "WordAssembler",

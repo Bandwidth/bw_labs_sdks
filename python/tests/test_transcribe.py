@@ -71,7 +71,6 @@ def test_transcribe_bytes_params_and_response(
     result = client.transcribe(
         b"\0" * 32000,
         model="tag-1",
-        multichannel=False,
         redact_pii=True,
         redact_pii_policies=["ssn", "phone"],
         redact_pii_sub="entity_name",
@@ -81,6 +80,9 @@ def test_transcribe_bytes_params_and_response(
     assert result.request_id == "req-t"
     assert result.text == "i need a dry van"
     assert [w.word for w in result.words][:2] == ["i", "need"]
+    assert result.segments[0].text == "i need a dry van"
+    assert result.segments[0].start == 0.0
+    assert result.segments[0].end == 0.72
     assert result.audio_duration_seconds == 2.5
     assert result.raw["request_id"] == "req-t"
 
@@ -114,10 +116,12 @@ def test_transcribe_wav_path_uses_header_rate(
     client = BwSttClient(base_url=server.base_url)
     client.transcribe(path)
     query = dict(parse_qsl(urlsplit(server.recorder.path or "").query))
-    assert query["encoding"] == "linear16"
-    assert query["sample_rate"] == "8000"
+    assert "encoding" not in query
+    assert "sample_rate" not in query
     assert query["channels"] == "2"
-    assert server.recorder.body == payload  # PCM payload only, no WAV header
+    assert server.recorder.headers["content-type"] == "audio/wav"
+    assert server.recorder.body == path.read_bytes()
+    assert payload == server.recorder.body[-len(payload) :]
 
 
 def test_transcribe_wav_path_rejects_non_pcm16(
@@ -145,15 +149,25 @@ def test_transcribe_wav_path_rejects_other_encoding(
 def test_transcribe_raw_path(
     mock_http_server: HttpServerFactory, api_key_env: str, tmp_path: Path
 ) -> None:
-    path = tmp_path / "call.ulaw"
-    path.write_bytes(b"\x7f" * 8000)
+    path = tmp_path / "call.pcm"
+    path.write_bytes(b"\0" * 8000)
     server = mock_http_server()
     client = BwSttClient(base_url=server.base_url)
-    client.transcribe(path, encoding="mulaw", sample_rate=8000, raw=True)
+    client.transcribe(path, encoding="linear16", sample_rate=8000, raw=True)
     query = dict(parse_qsl(urlsplit(server.recorder.path or "").query))
-    assert query["encoding"] == "mulaw"
+    assert query["encoding"] == "linear16"
     assert query["sample_rate"] == "8000"
-    assert server.recorder.body == b"\x7f" * 8000
+    assert server.recorder.headers["content-type"] == "application/octet-stream"
+    assert server.recorder.body == b"\0" * 8000
+
+
+def test_transcribe_rejects_non_linear16_raw_audio(
+    mock_http_server: HttpServerFactory, api_key_env: str
+) -> None:
+    server = mock_http_server()
+    client = BwSttClient(base_url=server.base_url)
+    with pytest.raises(ValueError, match="linear16"):
+        client.transcribe(b"\0" * 3200, encoding="mulaw")  # type: ignore[arg-type]
 
 
 def test_transcribe_error_mappings(mock_http_server: HttpServerFactory, api_key_env: str) -> None:
@@ -165,7 +179,7 @@ def test_transcribe_error_mappings(mock_http_server: HttpServerFactory, api_key_
         ),
         (HttpScript(status=401), AuthenticationError, "401"),
         (HttpScript(status=403), AuthenticationError, "403"),
-        (HttpScript(status=413), InvalidRequestError, "5 minutes"),
+        (HttpScript(status=413), InvalidRequestError, "five minutes"),
         (HttpScript(status=500), ServiceUnavailableError, "500"),
         (HttpScript(status=503), ServiceUnavailableError, "503"),
     ]
