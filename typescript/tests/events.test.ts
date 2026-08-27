@@ -34,21 +34,31 @@ describe("parseEvent", () => {
 
   it("parses Transcript words and redaction summary", () => {
     const event = parseEvent(
-      '{"type":"Transcript","channel":1,"text":"hello","words":[{"word":"hello","start":0,"end":0.4}],"redaction":{"applied":true,"policies":["ssn"],"entities_redacted":1}}',
+      '{"type":"Transcript","channel":1,"text":"hello","words":[{"word":"hello","start":0,"end":0.4}],"redaction":{"applied":true,"entities_redacted":1}}',
     );
     expect(event).toMatchObject({
       type: "Transcript",
       channel: 1,
       text: "hello",
       words: [{ word: "hello", start: 0, end: 0.4 }],
-      redaction: { applied: true, policies: ["ssn"], entitiesRedacted: 1 },
+      redaction: { applied: true, entitiesRedacted: 1 },
     });
     if (event.type === "Transcript") expect(event.redaction.entitiesRedacted).toBe(1);
   });
 
+  it("ignores legacy policy fields in redaction summaries", () => {
+    const event = parseEvent(
+      '{"type":"Transcript","channel":0,"text":"hello","words":[],"redaction":{"applied":true,"policies":["legacy"],"entities_redacted":1}}',
+    );
+    expect(event.type).toBe("Transcript");
+    if (event.type === "Transcript") {
+      expect(event.redaction).toEqual({ applied: true, entitiesRedacted: 1 });
+    }
+  });
+
   it("parses redacted entities and preserves nullable timestamps", () => {
     const event = parseEvent(
-      '{"type":"Transcript","channel":0,"text":"card hash:v1:9f2c41d08ab37e15","words":[],"redaction":{"applied":true,"policies":["credit_card"],"entities_redacted":1},"redacted_entities":[{"token":"hash:v1:9f2c41d08ab37e15","kind":"credit_card","text":"4111 1111 1111 1111","start":0.5,"end":1.2},{"token":"hash:v1:abc","kind":"ssn","text":"123-45-6789"}]}',
+      '{"type":"Transcript","channel":0,"text":"card hash:v1:9f2c41d08ab37e15","words":[],"redaction":{"applied":true,"entities_redacted":1},"redacted_entities":[{"token":"hash:v1:9f2c41d08ab37e15","kind":"credit_card","text":"4111 1111 1111 1111","start":0.5,"end":1.2},{"token":"hash:v1:abc","kind":"ssn","text":"123-45-6789"}]}',
     );
     expect(event).toMatchObject({
       type: "Transcript",
@@ -67,7 +77,7 @@ describe("parseEvent", () => {
 
   it("distinguishes an absent redacted entity field from an empty array", () => {
     const base =
-      '{"type":"Transcript","channel":0,"text":"hello","words":[],"redaction":{"applied":false,"policies":[],"entities_redacted":0}';
+      '{"type":"Transcript","channel":0,"text":"hello","words":[],"redaction":{"applied":false,"entities_redacted":0}';
     const absent = parseEvent(`${base}}`);
     const empty = parseEvent(`${base},"redacted_entities":[]}`);
     expect(absent.type).toBe("Transcript");

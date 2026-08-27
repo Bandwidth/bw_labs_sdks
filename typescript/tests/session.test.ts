@@ -61,7 +61,6 @@ function transcriptEvent(
     words: text === "" ? [] : [{ word: text, start: 0, end: 0.2 }],
     redaction: {
       applied,
-      policies: applied ? ["ssn"] : [],
       entities_redacted: options.entities ?? 0,
     },
   };
@@ -126,7 +125,6 @@ describe("connect", () => {
     const session = await client.connect({
       mode: "demand",
       redactPii: true,
-      redactPiiPolicies: ["ssn"],
       redactPiiSub: "hash",
       redactPiiReturn: true,
       keywords: ["dry van", "reefer"],
@@ -134,7 +132,6 @@ describe("connect", () => {
     const connection = await server.waitForConnection();
     expect(connection.query.get("mode")).toBe("demand");
     expect(connection.query.get("redact_pii")).toBe("true");
-    expect(connection.query.get("redact_pii_policies")).toBe("ssn");
     expect(connection.query.get("redact_pii_sub")).toBe("hash");
     expect(connection.query.get("redact_pii_return")).toBe("true");
     expect(connection.query.getAll("keywords")).toEqual(["dry van", "reefer"]);
@@ -493,7 +490,7 @@ describe("finalize", () => {
     const result = await session.finalizeTranscript();
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ channel: 0, text: "", words: [] });
-    expect(result[0]!.redaction).toEqual({ applied: false, policies: [], entitiesRedacted: 0 });
+    expect(result[0]!.redaction).toEqual({ applied: false, entitiesRedacted: 0 });
     session.disconnect();
   });
 

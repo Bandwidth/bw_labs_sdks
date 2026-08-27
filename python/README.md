@@ -156,12 +156,11 @@ piece to its last. See `examples/transcribe_wav.py` for a complete CLI.
 
 ## PII redaction
 
-Ask the service to redact personally identifiable information in results:
+Ask the service to redact common US PII categories in results:
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `redact_pii` | `bool` | `False` | Redact personally identifiable information. |
-| `redact_pii_policies` | sequence of `str` | unset | Narrow redaction to these policy names. |
 | `redact_pii_sub` | `str` | unset | Use `entity_name` or `hash` for replacements. |
 | `redact_pii_return` | `bool` | `False` | Return redacted entity spans. Requires `redact_pii=True` and hash substitution. |
 
@@ -169,7 +168,6 @@ Ask the service to redact personally identifiable information in results:
 session = client.connect(
     mode="demand",
     redact_pii=True,
-    redact_pii_policies=["ssn", "credit_card"],  # optional narrowing
     redact_pii_return=True,  # omit redact_pii_sub to use the server's hash default
 )
 transcripts = session.finalize_transcript()
@@ -187,17 +185,16 @@ The demand transcript includes a summary such as:
 {
   "type": "Transcript",
   "channel": 0,
-  "text": "my number is [ssn]",
+  "text": "my number is [redacted]",
   "words": [],
   "redaction": {
     "applied": true,
-    "policies": ["ssn"],
     "entities_redacted": 1
   },
   "redacted_entities": [
     {
       "token": "hash:v1:9f2c41d08ab37e15",
-      "kind": "ssn",
+      "kind": "pii",
       "text": "123-45-6789",
       "start": 2.10,
       "end": 2.45
@@ -211,8 +208,8 @@ tuple when the server sends an empty array. Each returned `token` is the exact
 hash token in the redacted text, so it can be joined to the corresponding
 entity. `start` and `end` are `None` when the server has no timestamps. The
 same options apply to `transcribe()`. When `redact_pii_return=True`,
-`redact_pii_sub="entity_name"` is invalid. The policy names shown here are
-illustrative; the supported list ships with the published API reference.
+`redact_pii_sub="entity_name"` is invalid. Redaction covers common US PII
+categories selected by the service.
 
 ## Keyword boosting
 

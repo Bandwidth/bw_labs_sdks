@@ -128,7 +128,6 @@ describe("transcribe", () => {
       channels: 2,
       model: "pinned",
       redactPii: true,
-      redactPiiPolicies: ["ssn", "phone"],
       redactPiiSub: "entity_name",
       keywords: ["dry van", "reefer"],
     });
@@ -145,7 +144,6 @@ describe("transcribe", () => {
     expect(params.get("multichannel")).toBeNull();
     expect(params.get("model")).toBe("pinned");
     expect(params.get("redact_pii")).toBe("true");
-    expect(params.get("redact_pii_policies")).toBe("ssn,phone");
     expect(params.get("redact_pii_sub")).toBe("entity_name");
     expect(params.getAll("keywords")).toEqual(["dry van", "reefer"]);
     expect(result.requestId).toBe("req-t1");

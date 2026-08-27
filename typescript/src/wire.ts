@@ -7,7 +7,6 @@ export const API_KEY_ENV_VAR = "BW_STT_API_KEY";
 // Wire names and offline media rules confirmed against the sidecar transcribe
 // contract. Keep SDK-to-wire mapping in this module.
 export const PARAM_REDACT_PII = "redact_pii";
-export const PARAM_REDACT_PII_POLICIES = "redact_pii_policies";
 export const PARAM_REDACT_PII_SUB = "redact_pii_sub";
 export const PARAM_REDACT_PII_RETURN = "redact_pii_return";
 export const PARAM_KEYWORDS = "keywords";
@@ -34,7 +33,6 @@ export interface WireMediaOptions {
 
 export interface WireFeatureOptions {
   readonly redactPii?: boolean;
-  readonly redactPiiPolicies?: readonly string[];
   readonly redactPiiSub?: string;
   readonly redactPiiReturn?: boolean;
   readonly keywords?: readonly string[];
@@ -65,9 +63,6 @@ function appendFeatureQuery(params: URLSearchParams, features: WireFeatureOption
     throw new TypeError("redactPiiReturn cannot be combined with redactPiiSub: entity_name");
   }
   if (features.redactPii) params.set(PARAM_REDACT_PII, "true");
-  if (features.redactPiiPolicies !== undefined && features.redactPiiPolicies.length > 0) {
-    params.set(PARAM_REDACT_PII_POLICIES, features.redactPiiPolicies.join(","));
-  }
   if (features.redactPiiSub !== undefined) params.set(PARAM_REDACT_PII_SUB, features.redactPiiSub);
   if (features.redactPiiReturn) params.set(PARAM_REDACT_PII_RETURN, "true");
   if (features.keywords !== undefined) {

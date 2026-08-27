@@ -14,7 +14,6 @@ API_KEY_HEADER = "X-BW-LABS-API-KEY"
 # Wire names and offline media rules confirmed against the sidecar transcribe
 # contract. Keep SDK-to-wire mapping in this module.
 PARAM_REDACT_PII = "redact_pii"
-PARAM_REDACT_PII_POLICIES = "redact_pii_policies"
 PARAM_REDACT_PII_SUB = "redact_pii_sub"
 PARAM_REDACT_PII_RETURN = "redact_pii_return"
 PARAM_KEYWORDS = "keywords"
@@ -52,7 +51,6 @@ class SessionParams:
     model: str | None = None
     mode: Literal["instant", "demand"] | None = None
     redact_pii: bool = False
-    redact_pii_policies: Sequence[str] | None = None
     redact_pii_sub: str | None = None
     redact_pii_return: bool = False
     keywords: Sequence[str] | None = None
@@ -118,8 +116,6 @@ class SessionParams:
             pairs.append(("mode", self.mode))
         if self.redact_pii:
             pairs.append((PARAM_REDACT_PII, "true"))
-        if self.redact_pii_policies:
-            pairs.append((PARAM_REDACT_PII_POLICIES, ",".join(self.redact_pii_policies)))
         if self.redact_pii_sub is not None:
             pairs.append((PARAM_REDACT_PII_SUB, self.redact_pii_sub))
         if self.redact_pii_return:

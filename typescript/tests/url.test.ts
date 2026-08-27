@@ -50,19 +50,16 @@ describe("buildListenUrl", () => {
     const url = new URL(
       buildListenUrl("wss://api.labs.bandwidth.com", {
         redactPii: true,
-        redactPiiPolicies: ["ssn", "credit_card"],
         redactPiiSub: "entity_name",
       }),
     );
     expect(url.searchParams.get("redact_pii")).toBe("true");
-    expect(url.searchParams.get("redact_pii_policies")).toBe("ssn,credit_card");
     expect(url.searchParams.get("redact_pii_sub")).toBe("entity_name");
   });
 
   it("omits PII parameters unless enabled", () => {
     const url = new URL(buildListenUrl("wss://api.labs.bandwidth.com", { redactPii: false }));
     expect(url.searchParams.get("redact_pii")).toBeNull();
-    expect(url.searchParams.get("redact_pii_policies")).toBeNull();
     expect(url.searchParams.get("redact_pii_sub")).toBeNull();
     expect(url.searchParams.get("redact_pii_return")).toBeNull();
   });

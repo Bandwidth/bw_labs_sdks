@@ -39,7 +39,6 @@ def transcript_event(
         "words": [] if not text else [{"word": text, "start": 0.0, "end": 0.2}],
         "redaction": {
             "applied": applied,
-            "policies": ["ssn"] if applied else [],
             "entities_redacted": entities,
         },
     }

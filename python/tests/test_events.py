@@ -65,15 +65,24 @@ def test_parse_transcript_with_redaction_summary() -> None:
         "channel": 1,
         "text": "hello",
         "words": [{"word": "hello", "start": 0.0, "end": 0.4}],
-        "redaction": {"applied": True, "policies": ["ssn"], "entities_redacted": 1},
+        "redaction": {"applied": True, "entities_redacted": 1},
     }
     event = parse_event(json.dumps(payload))
     assert isinstance(event, Transcript)
     assert event.channel == 1
     assert event.text == "hello"
     assert event.words[0].word == "hello"
-    assert event.redaction == RedactionSummary(True, ("ssn",), 1)
+    assert event.redaction == RedactionSummary(True, 1)
     assert event.raw == payload
+
+
+def test_parse_transcript_ignores_legacy_redaction_policies() -> None:
+    event = parse_event(
+        '{"type":"Transcript","channel":0,"text":"hello","words":[],'
+        '"redaction":{"applied":true,"policies":["legacy"],"entities_redacted":1}}'
+    )
+    assert isinstance(event, Transcript)
+    assert event.redaction == RedactionSummary(applied=True, entities_redacted=1)
 
 
 def test_parse_transcript_with_redacted_entities() -> None:
@@ -82,7 +91,7 @@ def test_parse_transcript_with_redacted_entities() -> None:
         "channel": 0,
         "text": "card hash:v1:9f2c41d08ab37e15",
         "words": [],
-        "redaction": {"applied": True, "policies": ["credit_card"], "entities_redacted": 1},
+        "redaction": {"applied": True, "entities_redacted": 1},
         "redacted_entities": [
             {
                 "token": "hash:v1:9f2c41d08ab37e15",
@@ -114,7 +123,7 @@ def test_parse_redacted_entity_missing_timestamps_as_none() -> None:
                 "channel": 0,
                 "text": "hash:v1:abc",
                 "words": [],
-                "redaction": {"applied": True, "policies": ["ssn"], "entities_redacted": 1},
+                "redaction": {"applied": True, "entities_redacted": 1},
                 "redacted_entities": [
                     {"token": "hash:v1:abc", "kind": "ssn", "text": "123-45-6789"}
                 ],
@@ -130,11 +139,11 @@ def test_parse_redacted_entity_missing_timestamps_as_none() -> None:
 def test_parse_redacted_entities_absent_and_empty() -> None:
     absent = parse_event(
         '{"type":"Transcript","channel":0,"text":"hello","words":[],'
-        '"redaction":{"applied":false,"policies":[],"entities_redacted":0}}'
+        '"redaction":{"applied":false,"entities_redacted":0}}'
     )
     empty = parse_event(
         '{"type":"Transcript","channel":0,"text":"hello","words":[],'
-        '"redaction":{"applied":false,"policies":[],"entities_redacted":0},'
+        '"redaction":{"applied":false,"entities_redacted":0},'
         '"redacted_entities":[]}'
     )
     assert isinstance(absent, Transcript)
