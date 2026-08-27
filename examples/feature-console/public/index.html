@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>STT Feature Console</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand-block">
+          <p class="eyebrow">Bandwidth Labs</p>
+          <h1>STT feature console</h1>
+          <p class="subtitle">Local manual test surface for streaming and whole-file transcription.</p>
+        </div>
+        <div class="connection-form" aria-label="Connection settings">
+          <label class="field">
+            <span>API key</span>
+            <span class="secret-input">
+              <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="bwa_key_...">
+              <button id="toggle-key" class="button button-small" type="button">Show</button>
+            </span>
+            <small>Kept in memory only.</small>
+          </label>
+          <label class="field">
+            <span>Base URL</span>
+            <input id="base-url" type="url" value="https://api.labs.bandwidth.com" spellcheck="false">
+            <small>Point at http://127.0.0.1:PORT for a port-forwarded instance.</small>
+          </label>
+        </div>
+      </header>
+
+      <div class="status-strip" role="status" aria-live="polite">
+        <span id="status-dot" class="status-dot status-idle" aria-hidden="true"></span>
+        <span id="status-state">Disconnected</span>
+        <span class="status-divider">|</span>
+        <span>session request_id</span>
+        <code id="session-request-id">none</code>
+      </div>
+
+      <nav class="tabs" role="tablist" aria-label="STT modes">
+        <button id="tab-button-instant" class="tab-button active" type="button" role="tab" aria-selected="true" aria-controls="tab-instant">INSTANT</button>
+        <button id="tab-button-demand" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="tab-demand">DEMAND</button>
+        <button id="tab-button-transcribe" class="tab-button" type="button" role="tab" aria-selected="false" aria-controls="tab-transcribe">TRANSCRIBE</button>
+      </nav>
+
+      <main>
+        <section id="tab-instant" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-instant">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Live stream</p>
+              <h2>Instant segments</h2>
+              <p class="panel-copy">Final Segment.text values are joined exactly as received.</p>
+            </div>
+            <div class="button-row">
+              <button id="instant-start" class="button button-primary" type="button">Start microphone</button>
+              <button id="instant-stop" class="button" type="button" disabled>Stop microphone</button>
+            </div>
+          </div>
+          <div class="card transcript-card">
+            <div class="card-heading">
+              <h3>Live transcript</h3>
+              <span id="instant-segment-count" class="badge">0 segments</span>
+            </div>
+            <pre id="instant-transcript" class="transcript-pane" aria-label="Live transcript"></pre>
+          </div>
+          <details class="card collapsible-card">
+            <summary>Words <span id="instant-word-count" class="muted">0</span></summary>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>word</th><th>start</th><th>end</th></tr></thead>
+                <tbody id="instant-words"></tbody>
+              </table>
+            </div>
+          </details>
+        </section>
+
+        <section id="tab-demand" class="tab-panel hidden" role="tabpanel" aria-labelledby="tab-button-demand" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Turn boundaries</p>
+              <h2>Demand delivery</h2>
+              <p class="panel-copy">Finalize sends one Transcript per channel. CloseStream drains the remainder.</p>
+            </div>
+            <div class="button-row">
+              <button id="demand-start" class="button button-primary" type="button">Start microphone</button>
+              <button id="demand-finalize" class="button button-accent" type="button" disabled>Finalize</button>
+              <button id="demand-close" class="button" type="button" disabled>CloseStream</button>
+            </div>
+          </div>
+          <div id="demand-deliveries" class="delivery-stack">
+            <div class="empty-state">No deliveries yet. Start the microphone, speak, then finalize a turn.</div>
+          </div>
+        </section>
+
+        <section id="tab-transcribe" class="tab-panel hidden" role="tabpanel" aria-labelledby="tab-button-transcribe" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Whole recording</p>
+              <h2>Offline transcribe</h2>
+              <p class="panel-copy">Send a 16-bit PCM WAV file or record a 10 second 16 kHz mono clip.</p>
+            </div>
+          </div>
+          <div class="card file-card">
+            <div class="file-controls">
+              <label class="field file-picker">
+                <span>WAV file</span>
+                <input id="wav-file" type="file" accept=".wav,audio/wav">
+                <small id="file-name">No file selected.</small>
+              </label>
+              <div class="button-row record-controls">
+                <button id="record-ten" class="button button-primary" type="button">Record 10 seconds</button>
+                <button id="transcribe-send" class="button button-accent" type="button" disabled>Send</button>
+              </div>
+            </div>
+            <p id="record-status" class="inline-status" aria-live="polite"></p>
+          </div>
+          <div id="transcribe-response" class="card response-card">
+            <div class="empty-state">Choose or record a WAV, then send it to see the typed response.</div>
+          </div>
+        </section>
+
+        <section class="card options-card" aria-labelledby="options-heading">
+          <div class="card-heading">
+            <div>
+              <p class="eyebrow">Request features</p>
+              <h2 id="options-heading">Shared options</h2>
+            </div>
+            <span class="muted">Applied to the active tab</span>
+          </div>
+          <div class="options-grid">
+            <label class="field keywords-field">
+              <span>Keywords</span>
+              <input id="keywords" type="text" placeholder="dry van, reefer, appointment" spellcheck="false">
+              <small>Comma separated boost terms.</small>
+            </label>
+            <div class="option-group pii-group">
+              <label class="switch-row" for="pii-enabled">
+                <input id="pii-enabled" type="checkbox">
+                <span class="switch-control" aria-hidden="true"></span>
+                <span>PII redaction</span>
+              </label>
+              <p class="option-help">Redaction is applied only to demand and transcribe results.</p>
+              <div id="pii-policy-list" class="policy-list">
+                <span class="label-small">Policies</span>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="credit_card"> credit_card</label>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="ssn"> ssn</label>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="phone"> phone</label>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="email"> email</label>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="dob"> dob</label>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="account_ticket"> account_ticket</label>
+                <label><input class="pii-control policy-checkbox" type="checkbox" value="zip"> zip</label>
+              </div>
+              <div class="radio-row">
+                <span class="label-small">Substitution</span>
+                <label><input class="pii-control substitution-radio" type="radio" name="pii-sub" value="entity_name"> entity_name</label>
+                <label><input class="pii-control substitution-radio" type="radio" name="pii-sub" value="hash" checked> hash</label>
+              </div>
+              <label class="switch-row compact-switch" for="pii-return">
+                <input id="pii-return" class="pii-control" type="checkbox">
+                <span class="switch-control" aria-hidden="true"></span>
+                <span>Return redacted entities</span>
+              </label>
+            </div>
+          </div>
+          <p id="pii-disabled-note" class="notice" hidden>PII redaction controls are disabled on Instant. Redaction is demand and transcribe only.</p>
+        </section>
+
+        <details class="card raw-log-card">
+          <summary>Raw event log <span id="raw-log-count" class="muted">0 entries</span></summary>
+          <div class="raw-log-toolbar">
+            <span class="muted">Newest entries appear last.</span>
+            <button id="clear-log" class="button button-small" type="button">Clear</button>
+          </div>
+          <pre id="raw-log" class="raw-log" aria-label="Raw event log"></pre>
+        </details>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>
