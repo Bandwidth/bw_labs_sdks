@@ -2,7 +2,7 @@
 
 Python SDK for the Bandwidth Labs speech-to-text API. Stream audio over a
 WebSocket and receive final transcript segments in real time, or send a whole
-recording for offline transcription.
+recording for whole-file transcription.
 
 ## Install
 
@@ -61,10 +61,10 @@ callbacks and keeps every drained event available from `events()` afterwards,
 so assemble the transcript through a callback (as above) or by consuming
 `events()`, not from the send-side iteration alone.
 
-## Listen modes and offline transcribe
+## Listen modes and Transcribe
 
 Instant and demand are modes of the `/audio/v1/listen` WebSocket endpoint.
-Offline transcription uses `POST /audio/v1/transcribe` over HTTP and is not a
+Transcribe uses `POST /audio/v1/transcribe` over HTTP and is not a
 WebSocket session mode.
 
 | Mode | Delivery | Best for |
@@ -98,7 +98,7 @@ closed = session.close_stream()  # remainder Transcripts, then SessionClosed
 Each demand `Transcript` has `channel`, `text`, timestamped `words`, and a
 `redaction` summary. Demand mode never sends `Segment` events.
 
-**Transcribe** is offline: one HTTP request for a whole recording of up to
+**Transcribe** is non-streaming: one HTTP request for a whole recording of up to
 five minutes, one result back. No session to manage:
 
 ```python
@@ -131,7 +131,7 @@ A successful response has this shape:
 ```
 
 `words` is a timestamped word list and may be empty. `segments` always carries
-the typed offline segment list with `start`, `end`, and `text`.
+the typed segment list with `start`, `end`, and `text`.
 
 ## Live word display
 
