@@ -9,7 +9,7 @@ import weakref
 from collections.abc import Callable, Coroutine, Iterable, Iterator, Sequence
 from pathlib import Path
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from . import _http
 from ._framing import FrameChunker, iter_raw_chunks, iter_wav_chunks
@@ -92,7 +92,7 @@ class BwSttClient:
         channels: int = 1,
         multichannel: bool = False,
         model: str | None = None,
-        mode: str | None = None,
+        mode: Literal["instant", "demand"] | None = None,
         redact_pii: bool = False,
         redact_pii_policies: Sequence[str] | None = None,
         redact_pii_sub: str | None = None,
@@ -136,10 +136,9 @@ class BwSttClient:
         self,
         audio: bytes | str | Path,
         *,
-        encoding: str = "linear16",
+        encoding: Literal["linear16"] = "linear16",
         sample_rate: int = 16000,
         channels: int = 1,
-        multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
         redact_pii_policies: Sequence[str] | None = None,
@@ -150,10 +149,10 @@ class BwSttClient:
     ) -> Transcription:
         """Transcribe a whole recording in one request.
 
-        A str or Path is read as a PCM16 WAV file (its header supplies the
-        sample rate and channel count) unless ``raw=True``; bytes are sent
-        as-is with the stated parameters. Accepts up to about 5 minutes of
-        audio.
+        A str or Path is uploaded as its PCM16 WAV container (its header
+        supplies the sample rate and channel count) unless ``raw=True``.
+        Raw bytes are sent as linear16 with the stated sample rate and
+        channels. Accepts up to five minutes of decoded audio.
         """
         api_key = _resolve_api_key(self.api_key)
         return _http.transcribe(
@@ -163,7 +162,6 @@ class BwSttClient:
             encoding=encoding,
             sample_rate=sample_rate,
             channels=channels,
-            multichannel=multichannel,
             model=model,
             redact_pii=redact_pii,
             redact_pii_policies=redact_pii_policies,

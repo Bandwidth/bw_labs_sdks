@@ -126,24 +126,37 @@ describe("buildTranscribeUrl", () => {
   it("carries media, PII, and keyword parameters", () => {
     const url = new URL(
       buildTranscribeUrl("wss://api.labs.bandwidth.com", {
-        encoding: "alaw",
+        encoding: "linear16",
         sampleRate: 8000,
         channels: 2,
-        multichannel: true,
         model: "pinned",
         redactPii: true,
         redactPiiSub: "hash",
         keywords: ["alpha", "beta"],
       }),
     );
-    expect(url.searchParams.get("encoding")).toBe("alaw");
+    expect(url.searchParams.get("encoding")).toBe("linear16");
     expect(url.searchParams.get("sample_rate")).toBe("8000");
     expect(url.searchParams.get("channels")).toBe("2");
-    expect(url.searchParams.get("multichannel")).toBe("true");
+    expect(url.searchParams.get("multichannel")).toBeNull();
     expect(url.searchParams.get("model")).toBe("pinned");
     expect(url.searchParams.get("redact_pii")).toBe("true");
     expect(url.searchParams.get("redact_pii_sub")).toBe("hash");
     expect(url.searchParams.getAll("keywords")).toEqual(["alpha", "beta"]);
+  });
+
+  it("omits raw-only format parameters for WAV uploads", () => {
+    const url = new URL(
+      buildTranscribeUrl(
+        "wss://api.labs.bandwidth.com",
+        { channels: 2, model: "pinned" },
+        false,
+      ),
+    );
+    expect(url.searchParams.get("encoding")).toBeNull();
+    expect(url.searchParams.get("sample_rate")).toBeNull();
+    expect(url.searchParams.get("channels")).toBe("2");
+    expect(url.searchParams.get("model")).toBe("pinned");
   });
 });
 

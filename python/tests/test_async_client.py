@@ -284,6 +284,7 @@ def test_async_transcribe(mock_http_server: HttpServerFactory, api_key_env: str)
         client = AsyncBwSttClient(base_url=server.base_url)
         result = await client.transcribe(b"\0" * 32000, keywords=["dry van"])
         assert result.text == "i need a dry van"
+        assert result.segments[0].text == "i need a dry van"
         assert result.audio_duration_seconds == 2.5
 
     asyncio.run(scenario())

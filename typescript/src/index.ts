@@ -30,6 +30,6 @@ export type {
   SttMode,
   TranscribeOptions,
 } from "./options";
-export type { Transcription } from "./transcribe";
+export type { Transcription, TranscriptionSegment } from "./transcribe";
 export type { Encoding } from "./framing";
 export type { Transport, TransportHandlers, TransportRequest, TransportSocket } from "./transport";

@@ -61,7 +61,11 @@ callbacks and keeps every drained event available from `events()` afterwards,
 so assemble the transcript through a callback (as above) or by consuming
 `events()`, not from the send-side iteration alone.
 
-## The three modes
+## Listen modes and offline transcribe
+
+Instant and demand are modes of the `/audio/v1/listen` WebSocket endpoint.
+Offline transcription uses `POST /audio/v1/transcribe` over HTTP and is not a
+WebSocket session mode.
 
 **Instant** is the server default. Segments are emitted the moment text is
 decoded, typically every 160 ms of audio. Use it for live captions and
@@ -82,17 +86,40 @@ session.send_audio(frame)  # ... keep sending
 session.finalize()  # results arrive as Segment events now
 ```
 
-**Transcribe** is offline: one HTTPS request for a whole recording of up to
-about 5 minutes, one result back. No session to manage:
+**Transcribe** is offline: one HTTP request for a whole recording of up to
+five minutes, one result back. No session to manage:
 
 ```python
 result = client.transcribe("call.wav")
 print(result.text, result.audio_duration_seconds)
 ```
 
-`transcribe` reads a WAV header for the sample rate and channel count, or
-accepts raw bytes (and `raw=True` for headerless files) with explicit
-parameters. The async client has the same method.
+`transcribe` uploads a WAV path as `audio/wav`, preserving its container and
+using the header's sample rate and channel count. Raw bytes and paths with
+`raw=True` use `application/octet-stream` with `encoding=linear16` and an
+explicit `sample_rate`; `channels` may be 1 or 2, with 2 selecting downmix.
+The async client has the same method.
+
+A successful response has this shape:
+
+```json
+{
+  "request_id": "6f58c1c6-7e0c-4bb8-9d72-3fb3d4c5c1aa",
+  "text": "i need a dry van",
+  "words": [
+    {"word": "i", "start": 0.00, "end": 0.12},
+    {"word": "need", "start": 0.16, "end": 0.20}
+  ],
+  "segments": [
+    {"start": 0.00, "end": 0.72, "text": "i need a dry van"}
+  ],
+  "audio_duration_seconds": 0.72,
+  "model_info": {"name": "bw-streaming-en", "version": "current"}
+}
+```
+
+`words` is a timestamped word list and may be empty. `segments` always carries
+the typed offline segment list with `start`, `end`, and `text`.
 
 ## Live word display
 

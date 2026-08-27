@@ -15,6 +15,8 @@ import {
   DEFAULT_CONNECT_TIMEOUT_MS,
   DEFAULT_KEEPALIVE_INTERVAL_MS,
   DEFAULT_TRANSCRIBE_TIMEOUT_MS,
+  TRANSCRIBE_RAW_CONTENT_TYPE,
+  TRANSCRIBE_WAV_CONTENT_TYPE,
 } from "./wire";
 
 export interface BwSttClientOptions {
@@ -103,21 +105,30 @@ export class BwSttClient {
 
   /** Transcribe a complete recording in one HTTP request. */
   async transcribe(input: Uint8Array | ArrayBuffer, options: TranscribeOptions = {}): Promise<Transcription> {
+    return this.transcribeBytes(input, options, true);
+  }
+
+  private transcribeBytes(
+    input: Uint8Array | ArrayBuffer,
+    options: TranscribeOptions,
+    rawInput: boolean,
+  ): Promise<Transcription> {
     const apiKey = this.resolveApiKey();
-    const url = buildTranscribeUrl(this.baseUrl, options);
+    const url = buildTranscribeUrl(this.baseUrl, options, rawInput);
     return requestTranscription({
       url,
       apiKey,
       body: toUint8Array(input),
+      contentType: rawInput ? TRANSCRIBE_RAW_CONTENT_TYPE : TRANSCRIBE_WAV_CONTENT_TYPE,
       timeoutMs: options.timeoutMs ?? DEFAULT_TRANSCRIBE_TIMEOUT_MS,
       ...(options.signal !== undefined ? { signal: options.signal } : {}),
     });
   }
 
   /**
-   * Transcribe an audio file. Node only. The default path expects a 16-bit PCM
-   * WAV file and takes sample rate and channel count from its header; pass
-   * raw: true to send headerless bytes described by the options instead.
+   * Transcribe an audio file. Node only. The default path uploads the complete
+   * 16-bit PCM WAV container and takes its sample rate and channel count from
+   * the header; pass raw: true to send headerless linear16 bytes instead.
    */
   async transcribeFile(path: string, options: TranscribeOptions & { raw?: boolean } = {}): Promise<Transcription> {
     if (!isNode()) throw new BwSttError("transcribeFile requires Node; pass bytes to transcribe instead");
@@ -127,7 +138,7 @@ export class BwSttClient {
       const { raw: _raw, ...rest } = options;
       return this.transcribe(bytes, rest);
     }
-    const { info, data } = parseWav(bytes);
+    const { info } = parseWav(bytes);
     if (!isPcm16(info)) {
       throw new TypeError(`${path}: only 16-bit PCM WAV is supported; pass raw: true for headerless audio`);
     }
@@ -141,12 +152,12 @@ export class BwSttClient {
       throw new TypeError(`${path}: WAV has ${info.channels} channel(s), the options request ${options.channels}`);
     }
     const { raw: _raw, ...rest } = options;
-    return this.transcribe(data, {
+    return this.transcribeBytes(bytes, {
       ...rest,
       encoding: "linear16",
       sampleRate: info.sampleRate,
       channels: info.channels,
-    });
+    }, false);
   }
 
   private resolveApiKey(): string {

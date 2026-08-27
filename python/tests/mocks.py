@@ -198,7 +198,9 @@ DEFAULT_TRANSCRIPTION: dict[str, Any] = {
         {"word": "dry", "start": 0.36, "end": 0.56},
         {"word": "van", "start": 0.60, "end": 0.72},
     ],
+    "segments": [{"start": 0.0, "end": 0.72, "text": "i need a dry van"}],
     "audio_duration_seconds": 2.5,
+    "model_info": {"name": "bw-streaming-en", "version": "current"},
 }
 
 

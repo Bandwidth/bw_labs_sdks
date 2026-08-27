@@ -15,6 +15,7 @@ __all__ = [
     "SessionClosed",
     "SessionOpened",
     "Transcription",
+    "TranscriptionSegment",
     "UnknownEvent",
     "Word",
     "parse_event",
@@ -89,12 +90,22 @@ class UnknownEvent:
 
 
 @dataclass(frozen=True)
+class TranscriptionSegment:
+    """One timestamped segment in an offline transcription result."""
+
+    start: float
+    end: float
+    text: str
+
+
+@dataclass(frozen=True)
 class Transcription:
     """Result of an offline transcribe request."""
 
     request_id: str
     text: str
     words: tuple[Word, ...]
+    segments: tuple[TranscriptionSegment, ...]
     audio_duration_seconds: float
     raw: dict[str, Any] = field(repr=False)
 
@@ -118,7 +129,7 @@ def _integer(obj: dict[str, Any], key: str) -> int:
 
 def _number(obj: dict[str, Any], key: str) -> float:
     value = obj.get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, int | float):
         raise ProtocolError(f"expected number {key!r} in server message")
     return float(value)
 
@@ -133,6 +144,24 @@ def _words(obj: dict[str, Any]) -> tuple[Word, ...]:
             raise ProtocolError("expected object entries in 'words'")
         words.append(Word(_string(item, "word"), _number(item, "start"), _number(item, "end")))
     return tuple(words)
+
+
+def _transcription_segments(obj: dict[str, Any]) -> tuple[TranscriptionSegment, ...]:
+    raw_segments = obj.get("segments", [])
+    if not isinstance(raw_segments, list):
+        raise ProtocolError("expected array 'segments' in transcribe response")
+    segments = []
+    for item in raw_segments:
+        if not isinstance(item, dict):
+            raise ProtocolError("expected object entries in 'segments'")
+        segments.append(
+            TranscriptionSegment(
+                start=_number(item, "start"),
+                end=_number(item, "end"),
+                text=_string(item, "text"),
+            )
+        )
+    return tuple(segments)
 
 
 def parse_event(payload: str | bytes) -> Event:
@@ -196,6 +225,7 @@ def parse_transcription(payload: str | bytes) -> Transcription:
         request_id=_string(value, "request_id"),
         text=_string(value, "text"),
         words=_words(value),
+        segments=_transcription_segments(value),
         audio_duration_seconds=_number(value, "audio_duration_seconds"),
         raw=value,
     )

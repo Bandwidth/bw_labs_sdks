@@ -39,7 +39,9 @@ const OK_BODY = JSON.stringify({
     { word: "i", start: 0.0, end: 0.12 },
     { word: "need", start: 0.16, end: 0.2 },
   ],
+  segments: [{ start: 0.0, end: 0.5, text: "i need a dry van" }],
   audio_duration_seconds: 0.5,
+  model_info: { name: "bw-streaming-en", version: "current" },
   pii_entities: [{ type: "ssn", start: 0.1, end: 0.2 }],
 });
 
@@ -124,7 +126,6 @@ describe("transcribe", () => {
     const result = await client().transcribe(audio, {
       sampleRate: 8000,
       channels: 2,
-      multichannel: true,
       model: "pinned",
       redactPii: true,
       redactPiiPolicies: ["ssn", "phone"],
@@ -141,7 +142,7 @@ describe("transcribe", () => {
     expect(params.get("encoding")).toBe("linear16");
     expect(params.get("sample_rate")).toBe("8000");
     expect(params.get("channels")).toBe("2");
-    expect(params.get("multichannel")).toBe("true");
+    expect(params.get("multichannel")).toBeNull();
     expect(params.get("model")).toBe("pinned");
     expect(params.get("redact_pii")).toBe("true");
     expect(params.get("redact_pii_policies")).toBe("ssn,phone");
@@ -150,6 +151,7 @@ describe("transcribe", () => {
     expect(result.requestId).toBe("req-t1");
     expect(result.text).toBe("i need a dry van");
     expect(result.words).toHaveLength(2);
+    expect(result.segments).toEqual([{ start: 0.0, end: 0.5, text: "i need a dry van" }]);
     expect(result.audioDurationSeconds).toBe(0.5);
     expect(result.raw.pii_entities).toEqual([{ type: "ssn", start: 0.1, end: 0.2 }]);
   });
@@ -164,7 +166,7 @@ describe("transcribe", () => {
 });
 
 describe("transcribeFile", () => {
-  it("extracts rate and channels from the WAV header and sends only the payload", async () => {
+  it("extracts rate and channels from the WAV header and uploads the WAV container", async () => {
     const payload = pcmBytes(1600);
     const wav = buildWav({ sampleRate: 8000, channels: 2, samplesPerChannel: 400 });
     wav.set(payload, wav.byteLength - payload.byteLength);
@@ -172,20 +174,22 @@ describe("transcribeFile", () => {
     await writeFile(path, wav);
     await client().transcribeFile(path);
     const request = server.requests[0]!;
-    expect(request.url.searchParams.get("encoding")).toBe("linear16");
-    expect(request.url.searchParams.get("sample_rate")).toBe("8000");
+    expect(request.headers["content-type"]).toBe("audio/wav");
+    expect(request.url.searchParams.get("encoding")).toBeNull();
+    expect(request.url.searchParams.get("sample_rate")).toBeNull();
     expect(request.url.searchParams.get("channels")).toBe("2");
-    expect(request.body).toHaveLength(1600);
-    expect(new Uint8Array(request.body)).toEqual(payload);
+    expect(new Uint8Array(request.body)).toEqual(wav);
+    expect(new Uint8Array(request.body.slice(-payload.byteLength))).toEqual(payload);
   });
 
   it("sends raw files untouched with the caller's options", async () => {
     const bytes = pcmBytes(1234);
-    const path = join(directory, "audio.mulaw");
+    const path = join(directory, "audio.pcm");
     await writeFile(path, bytes);
-    await client().transcribeFile(path, { raw: true, encoding: "mulaw", sampleRate: 8000 });
+    await client().transcribeFile(path, { raw: true, encoding: "linear16", sampleRate: 8000 });
     const request = server.requests[0]!;
-    expect(request.url.searchParams.get("encoding")).toBe("mulaw");
+    expect(request.headers["content-type"]).toBe("application/octet-stream");
+    expect(request.url.searchParams.get("encoding")).toBe("linear16");
     expect(request.url.searchParams.get("sample_rate")).toBe("8000");
     expect(new Uint8Array(request.body)).toEqual(bytes);
   });
@@ -211,9 +215,11 @@ describe("transcribeFile", () => {
     await writeFile(path, wav);
     await client().transcribeFile(path);
     const request = server.requests[0]!;
-    expect(request.url.searchParams.get("encoding")).toBe("linear16");
-    expect(request.url.searchParams.get("sample_rate")).toBe("8000");
-    expect(new Uint8Array(request.body)).toEqual(payload);
+    expect(request.headers["content-type"]).toBe("audio/wav");
+    expect(request.url.searchParams.get("encoding")).toBeNull();
+    expect(request.url.searchParams.get("sample_rate")).toBeNull();
+    expect(new Uint8Array(request.body)).toEqual(wav);
+    expect(new Uint8Array(request.body.slice(-payload.byteLength))).toEqual(payload);
   });
 
   it("rejects WAVE_FORMAT_EXTENSIBLE with a non-PCM subformat", async () => {
@@ -221,6 +227,22 @@ describe("transcribeFile", () => {
     await writeFile(path, buildWav({ sampleRate: 8000, channels: 1, samplesPerChannel: 400, extensibleSubFormat: 3 }));
     await expect(client().transcribeFile(path)).rejects.toThrow(/16-bit PCM/);
     expect(server.requests).toHaveLength(0);
+  });
+
+  it("accepts an empty words array while preserving offline segments", async () => {
+    server.response = {
+      body: JSON.stringify({
+        request_id: "req-empty-words",
+        text: "wav transcript",
+        words: [],
+        segments: [{ start: 0.0, end: 0.2, text: "wav transcript" }],
+        audio_duration_seconds: 0.2,
+        model_info: { name: "bw-streaming-en", version: "current" },
+      }),
+    };
+    const result = await client().transcribe(pcmBytes(2));
+    expect(result.words).toEqual([]);
+    expect(result.segments[0]).toEqual({ start: 0.0, end: 0.2, text: "wav transcript" });
   });
 });
 
@@ -266,7 +288,7 @@ describe("transcribe error mapping", () => {
         (error: unknown) => error,
       );
     expect(failure).toBeInstanceOf(InvalidRequestError);
-    expect((failure as InvalidRequestError).message).toContain("5 minutes");
+    expect((failure as InvalidRequestError).message).toContain("five minutes");
     expect((failure as InvalidRequestError).status).toBe(413);
   });
 

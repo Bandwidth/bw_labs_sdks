@@ -1,20 +1,16 @@
 import type { Encoding, FrameConfig } from "./framing";
 import {
-  API_KEY_PARAM,
+  appendListenQuery,
+  appendTranscribeQuery,
   LISTEN_PATH,
-  MAX_KEYWORDS,
-  PARAM_KEYWORDS,
-  PARAM_REDACT_PII,
-  PARAM_REDACT_PII_POLICIES,
-  PARAM_REDACT_PII_SUB,
   TRANSCRIBE_PATH,
 } from "./wire";
 
 export type AuthCarrier = "auto" | "header" | "query";
 export type PiiSubstitution = "entity_name" | "hash";
 
-/** How results are emitted. `instant` streams Segments as text is decoded; `demand` holds results until Finalize or CloseStream. */
-export type SttMode = "instant" | "demand" | (string & {});
+/** How results are emitted on the listen endpoint. */
+export type SttMode = "instant" | "demand";
 
 export interface MediaOptions {
   /** Audio payload interpretation. Default linear16. */
@@ -49,7 +45,11 @@ export interface ConnectOptions extends MediaOptions, FeatureOptions {
   connectTimeoutMs?: number;
 }
 
-export interface TranscribeOptions extends MediaOptions, FeatureOptions {
+export interface TranscribeOptions
+  extends Omit<MediaOptions, "encoding" | "multichannel">,
+    FeatureOptions {
+  /** Raw HTTP uploads are linear16. WAV files carry their own format in the container. */
+  encoding?: "linear16";
   /** Whole-request deadline in milliseconds, covering connection, headers, and body. Default 120000. */
   timeoutMs?: number;
   /** Caller-side cancellation; composed with the internal timeout. */
@@ -89,37 +89,6 @@ export function resolveMediaOptions(options: MediaOptions): ResolvedMedia {
   return resolved;
 }
 
-export function validateKeywords(keywords: readonly string[]): void {
-  if (keywords.length > MAX_KEYWORDS) {
-    throw new RangeError(`keywords accepts at most ${MAX_KEYWORDS} entries`);
-  }
-  for (const keyword of keywords) {
-    if (typeof keyword !== "string" || keyword.trim().length === 0) {
-      throw new TypeError("each keyword must contain non-whitespace text");
-    }
-  }
-}
-
-function appendMediaParams(params: URLSearchParams, media: ResolvedMedia): void {
-  params.set("encoding", media.encoding);
-  params.set("sample_rate", String(media.sampleRate));
-  params.set("channels", String(media.channels));
-  if (media.multichannel) params.set("multichannel", "true");
-  if (media.model !== undefined) params.set("model", media.model);
-}
-
-function appendFeatureParams(params: URLSearchParams, features: FeatureOptions): void {
-  if (features.redactPii) params.set(PARAM_REDACT_PII, "true");
-  if (features.redactPiiPolicies !== undefined && features.redactPiiPolicies.length > 0) {
-    params.set(PARAM_REDACT_PII_POLICIES, features.redactPiiPolicies.join(","));
-  }
-  if (features.redactPiiSub !== undefined) params.set(PARAM_REDACT_PII_SUB, features.redactPiiSub);
-  if (features.keywords !== undefined) {
-    validateKeywords(features.keywords);
-    for (const keyword of features.keywords) params.append(PARAM_KEYWORDS, keyword);
-  }
-}
-
 function parseBaseUrl(baseUrl: string): URL {
   let url: URL;
   try {
@@ -143,15 +112,20 @@ export function buildListenUrl(baseUrl: string, options: ConnectOptions, apiKey?
   url.protocol = url.protocol === "http:" ? "ws:" : url.protocol === "https:" ? "wss:" : url.protocol;
   if (isDefaultPath(url)) url.pathname = LISTEN_PATH;
   const params = url.searchParams;
-  appendMediaParams(params, resolveMediaOptions(options));
-  if (options.mode !== undefined) params.set("mode", options.mode);
-  appendFeatureParams(params, options);
-  if (apiKey !== undefined) params.set(API_KEY_PARAM, apiKey);
+  const media = resolveMediaOptions(options);
+  if (options.mode !== undefined && options.mode !== "instant" && options.mode !== "demand") {
+    throw new TypeError("mode must be instant or demand");
+  }
+  appendListenQuery(params, media, options, options.mode, apiKey);
   return url.toString();
 }
 
 /** HTTP endpoint for offline transcription, derived from the same baseUrl. */
-export function buildTranscribeUrl(baseUrl: string, options: TranscribeOptions): string {
+export function buildTranscribeUrl(
+  baseUrl: string,
+  options: TranscribeOptions,
+  rawInput = true,
+): string {
   const url = parseBaseUrl(baseUrl);
   url.protocol = url.protocol === "ws:" ? "http:" : url.protocol === "wss:" ? "https:" : url.protocol;
   if (isDefaultPath(url)) url.pathname = TRANSCRIBE_PATH;
@@ -161,9 +135,38 @@ export function buildTranscribeUrl(baseUrl: string, options: TranscribeOptions):
     url.pathname = url.pathname.replace(/\/$/, "") + "/transcribe";
   }
   const params = url.searchParams;
-  appendMediaParams(params, resolveMediaOptions(options));
-  appendFeatureParams(params, options);
+  const media = resolveTranscribeMediaOptions(options);
+  appendTranscribeQuery(params, media, options, rawInput);
   return url.toString();
+}
+
+export interface ResolvedTranscribeMedia {
+  readonly encoding: "linear16";
+  readonly sampleRate: number;
+  readonly channels: number;
+  readonly model?: string;
+}
+
+export function resolveTranscribeMediaOptions(options: TranscribeOptions): ResolvedTranscribeMedia {
+  const encoding = options.encoding ?? "linear16";
+  if (encoding !== "linear16") {
+    throw new TypeError("transcribe uploads require encoding: linear16");
+  }
+  const sampleRate = options.sampleRate ?? 16000;
+  const channels = options.channels ?? 1;
+  if (sampleRate !== 16000 && sampleRate !== 8000) {
+    throw new RangeError("sampleRate must be 16000 or 8000");
+  }
+  if (channels !== 1 && channels !== 2) {
+    throw new RangeError("channels must be 1 or 2");
+  }
+  const resolved: { encoding: "linear16"; sampleRate: number; channels: number; model?: string } = {
+    encoding,
+    sampleRate,
+    channels,
+  };
+  if (options.model !== undefined) resolved.model = options.model;
+  return resolved;
 }
 
 export function resolveAuthCarrier(carrier: AuthCarrier, runningInNode: boolean): "header" | "query" {
