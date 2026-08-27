@@ -11,9 +11,11 @@ from .errors import ProtocolError
 __all__ = [
     "ErrorEvent",
     "Event",
+    "RedactionSummary",
     "Segment",
     "SessionClosed",
     "SessionOpened",
+    "Transcript",
     "Transcription",
     "TranscriptionSegment",
     "UnknownEvent",
@@ -50,6 +52,26 @@ class Segment:
 
 
 @dataclass(frozen=True)
+class RedactionSummary:
+    """PII redaction information attached to a demand-mode transcript."""
+
+    applied: bool
+    policies: tuple[str, ...]
+    entities_redacted: int
+
+
+@dataclass(frozen=True)
+class Transcript:
+    """A complete demand-mode transcript for one channel."""
+
+    channel: int
+    text: str
+    words: tuple[Word, ...]
+    redaction: RedactionSummary
+    raw: dict[str, Any] = field(repr=False)
+
+
+@dataclass(frozen=True)
 class SessionOpened:
     """First event of a session, sent after a successful upgrade."""
 
@@ -70,6 +92,7 @@ class SessionClosed:
     audio_duration_seconds: float
     session_duration_seconds: float
     raw: dict[str, Any] = field(repr=False)
+    delivery_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,10 +130,11 @@ class Transcription:
     words: tuple[Word, ...]
     segments: tuple[TranscriptionSegment, ...]
     audio_duration_seconds: float
+    model_info: dict[str, Any]
     raw: dict[str, Any] = field(repr=False)
 
 
-Event: TypeAlias = SessionOpened | Segment | ErrorEvent | SessionClosed | UnknownEvent
+Event: TypeAlias = SessionOpened | Segment | Transcript | ErrorEvent | SessionClosed | UnknownEvent
 
 
 def _string(obj: dict[str, Any], key: str) -> str:
@@ -134,6 +158,13 @@ def _number(obj: dict[str, Any], key: str) -> float:
     return float(value)
 
 
+def _boolean(obj: dict[str, Any], key: str, *, default: bool | None = None) -> bool:
+    value = obj.get(key, default)
+    if not isinstance(value, bool):
+        raise ProtocolError(f"expected boolean {key!r} in server message")
+    return value
+
+
 def _words(obj: dict[str, Any]) -> tuple[Word, ...]:
     raw_words = obj.get("words", [])
     if not isinstance(raw_words, list):
@@ -144,6 +175,26 @@ def _words(obj: dict[str, Any]) -> tuple[Word, ...]:
             raise ProtocolError("expected object entries in 'words'")
         words.append(Word(_string(item, "word"), _number(item, "start"), _number(item, "end")))
     return tuple(words)
+
+
+def _redaction(obj: dict[str, Any]) -> RedactionSummary:
+    value = obj.get("redaction")
+    if not isinstance(value, dict):
+        raise ProtocolError("Transcript has no 'redaction' object")
+    applied = _boolean(value, "applied")
+    raw_policies = value.get("policies")
+    if not isinstance(raw_policies, list) or not all(
+        isinstance(policy, str) for policy in raw_policies
+    ):
+        raise ProtocolError("expected string array 'redaction.policies' in server message")
+    entities_redacted = value.get("entities_redacted")
+    if isinstance(entities_redacted, bool) or not isinstance(entities_redacted, int):
+        raise ProtocolError("expected integer 'redaction.entities_redacted' in server message")
+    return RedactionSummary(
+        applied=applied,
+        policies=tuple(raw_policies),
+        entities_redacted=entities_redacted,
+    )
 
 
 def _transcription_segments(obj: dict[str, Any]) -> tuple[TranscriptionSegment, ...]:
@@ -201,6 +252,14 @@ def parse_event(payload: str | bytes) -> Event:
             words=_words(value),
             raw=value,
         )
+    if event_type == "Transcript":
+        return Transcript(
+            channel=_integer(value, "channel"),
+            text=_string(value, "text"),
+            words=_words(value),
+            redaction=_redaction(value),
+            raw=value,
+        )
     if event_type == "Error":
         return ErrorEvent(code=_string(value, "code"), message=_string(value, "message"), raw=value)
     if event_type == "SessionClosed":
@@ -208,6 +267,7 @@ def parse_event(payload: str | bytes) -> Event:
             request_id=_string(value, "request_id"),
             audio_duration_seconds=_number(value, "audio_duration_seconds"),
             session_duration_seconds=_number(value, "session_duration_seconds"),
+            delivery_failed=_boolean(value, "delivery_failed", default=False),
             raw=value,
         )
     return UnknownEvent(type=event_type, raw=value)
@@ -221,11 +281,15 @@ def parse_transcription(payload: str | bytes) -> Transcription:
         raise ProtocolError("transcribe response is not valid JSON") from exc
     if not isinstance(value, dict):
         raise ProtocolError("transcribe response is not a JSON object")
+    model_info = value.get("model_info", {})
+    if not isinstance(model_info, dict):
+        raise ProtocolError("transcribe response model_info is not an object")
     return Transcription(
         request_id=_string(value, "request_id"),
         text=_string(value, "text"),
         words=_words(value),
         segments=_transcription_segments(value),
         audio_duration_seconds=_number(value, "audio_duration_seconds"),
+        model_info=model_info,
         raw=value,
     )

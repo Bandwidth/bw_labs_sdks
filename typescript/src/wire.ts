@@ -17,6 +17,7 @@ export const TRANSCRIBE_RAW_ENCODING = "linear16";
 export const TRANSCRIBE_MAX_AUDIO_DESCRIPTION = "five minutes";
 
 export const MAX_KEYWORDS = 100;
+export const MAX_KEYWORD_BYTES = 4096;
 export const TRANSCRIBE_MAX_AUDIO_MINUTES = 5;
 export const DEFAULT_KEEPALIVE_INTERVAL_MS = 25_000;
 export const DEFAULT_TRANSCRIBE_TIMEOUT_MS = 120_000;
@@ -41,10 +42,16 @@ export function validateKeywords(keywords: readonly string[]): void {
   if (keywords.length > MAX_KEYWORDS) {
     throw new RangeError(`keywords accepts at most ${MAX_KEYWORDS} entries`);
   }
+  const encoder = new TextEncoder();
+  let keywordBytes = 0;
   for (const keyword of keywords) {
     if (typeof keyword !== "string" || keyword.trim().length === 0) {
       throw new TypeError("each keyword must contain non-whitespace text");
     }
+    keywordBytes += encoder.encode(keyword).byteLength;
+  }
+  if (keywordBytes > MAX_KEYWORD_BYTES) {
+    throw new RangeError(`keywords must fit within ${MAX_KEYWORD_BYTES} UTF-8 bytes combined`);
   }
 }
 

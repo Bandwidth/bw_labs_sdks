@@ -7,9 +7,11 @@ import pytest
 from bw_stt.errors import ProtocolError
 from bw_stt.events import (
     ErrorEvent,
+    RedactionSummary,
     Segment,
     SessionClosed,
     SessionOpened,
+    Transcript,
     UnknownEvent,
     parse_event,
     parse_transcription,
@@ -56,11 +58,34 @@ def test_parse_segment_without_words_field() -> None:
     assert event.words == ()
 
 
+def test_parse_transcript_with_redaction_summary() -> None:
+    payload = {
+        "type": "Transcript",
+        "channel": 1,
+        "text": "hello",
+        "words": [{"word": "hello", "start": 0.0, "end": 0.4}],
+        "redaction": {"applied": True, "policies": ["ssn"], "entities_redacted": 1},
+    }
+    event = parse_event(json.dumps(payload))
+    assert isinstance(event, Transcript)
+    assert event.channel == 1
+    assert event.text == "hello"
+    assert event.words[0].word == "hello"
+    assert event.redaction == RedactionSummary(True, ("ssn",), 1)
+    assert event.raw == payload
+
+
 def test_parse_error_event() -> None:
     event = parse_event('{"type":"Error","code":"invalid_frame","message":"bad duration"}')
     assert isinstance(event, ErrorEvent)
     assert event.code == "invalid_frame"
     assert event.message == "bad duration"
+
+
+def test_parse_transcript_too_large_as_error_event() -> None:
+    event = parse_event('{"type":"Error","code":"transcript_too_large","message":"too large"}')
+    assert isinstance(event, ErrorEvent)
+    assert event.code == "transcript_too_large"
 
 
 def test_parse_session_closed() -> None:
@@ -71,6 +96,16 @@ def test_parse_session_closed() -> None:
     assert isinstance(event, SessionClosed)
     assert event.audio_duration_seconds == 184.32
     assert event.session_duration_seconds == 190.11
+    assert not event.delivery_failed
+
+
+def test_parse_failed_session_closed() -> None:
+    event = parse_event(
+        '{"type":"SessionClosed","request_id":"r","audio_duration_seconds":1,'
+        '"session_duration_seconds":2,"delivery_failed":true}'
+    )
+    assert isinstance(event, SessionClosed)
+    assert event.delivery_failed
 
 
 def test_unknown_event_passthrough() -> None:
@@ -103,6 +138,7 @@ def test_parse_transcription() -> None:
         "segments": [{"start": 0.0, "end": 0.4, "text": "hello"}],
         "audio_duration_seconds": 0.5,
         "pii_entities": [{"kind": "ssn"}],
+        "model_info": {"name": "bw-streaming-en", "version": "current"},
     }
     result = parse_transcription(json.dumps(payload))
     assert result.text == "hello"
@@ -111,6 +147,7 @@ def test_parse_transcription() -> None:
     assert result.segments[0].start == 0.0
     assert result.segments[0].end == 0.4
     assert result.audio_duration_seconds == 0.5
+    assert result.model_info == {"name": "bw-streaming-en", "version": "current"}
     assert result.raw["pii_entities"] == [{"kind": "ssn"}]
 
 

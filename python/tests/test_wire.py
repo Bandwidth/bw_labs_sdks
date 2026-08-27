@@ -80,6 +80,12 @@ def test_keyword_validation() -> None:
     assert SessionParams(keywords=["k"] * 100).keywords is not None
 
 
+def test_keyword_byte_validation() -> None:
+    assert SessionParams(keywords=["a" * 4096]).keywords is not None
+    with pytest.raises(ValueError, match="4096"):
+        SessionParams(keywords=["a" * 4095, "é"])
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

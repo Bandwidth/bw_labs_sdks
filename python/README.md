@@ -67,24 +67,36 @@ Instant and demand are modes of the `/audio/v1/listen` WebSocket endpoint.
 Offline transcription uses `POST /audio/v1/transcribe` over HTTP and is not a
 WebSocket session mode.
 
-**Instant** is the server default. Segments are emitted the moment text is
-decoded, typically every 160 ms of audio. Use it for live captions and
-voice interfaces:
+| Mode | Delivery | Best for |
+|---|---|---|
+| `instant` (default) | Final `Segment` events arrive as audio is decoded. | Live captions and continuously updating displays |
+| `demand` | Each `Finalize` gets one `Transcript` per channel, including empty transcripts. `CloseStream` delivers the remainder the same way, then `SessionClosed`. | Voice-agent turns and application-controlled boundaries |
+
+In instant mode, register `on_segment` or consume `events()` as audio is sent:
 
 ```python
 session = client.connect(mode="instant")  # or omit mode
+session.on_segment(lambda segment: render(segment.text))
 ```
 
-**Demand** is protocol-identical on the wire, but results arrive when you ask
-for them: send audio, then call `finalize()` (session stays open) or
-`close_stream()` and consume the segments that follow. Use it when you batch
-audio and want results at utterance boundaries you control:
+In demand mode, a `Finalize` is a turn boundary. `finalize()` only sends the
+control message and returns immediately. Use `finalize_transcript()` when the
+voice-agent turn needs its per-channel `Transcript` response:
 
 ```python
 session = client.connect(mode="demand")
-session.send_audio(frame)  # ... keep sending
-session.finalize()  # results arrive as Segment events now
+for turn_frames in caller_turns:
+    for frame in turn_frames:
+        session.send_audio(frame)
+    transcripts = session.finalize_transcript()  # one Transcript per channel
+    turn_text = " ".join(transcript.text for transcript in transcripts)
+    answer_turn(turn_text)
+
+closed = session.close_stream()  # remainder Transcripts, then SessionClosed
 ```
+
+Each demand `Transcript` has `channel`, `text`, timestamped `words`, and a
+`redaction` summary. Demand mode never sends `Segment` events.
 
 **Transcribe** is offline: one HTTP request for a whole recording of up to
 five minutes, one result back. No session to manage:
@@ -148,10 +160,30 @@ Ask the service to redact personally identifiable information in results:
 
 ```python
 session = client.connect(
+    mode="demand",
     redact_pii=True,
     redact_pii_policies=["ssn", "credit_card"],  # optional narrowing
     redact_pii_sub="entity_name",  # "entity_name" or "hash"
 )
+transcripts = session.finalize_transcript()
+for transcript in transcripts:
+    print(transcript.text, transcript.redaction)
+```
+
+The demand transcript includes a summary such as:
+
+```json
+{
+  "type": "Transcript",
+  "channel": 0,
+  "text": "my number is [ssn]",
+  "words": [],
+  "redaction": {
+    "applied": true,
+    "policies": ["ssn"],
+    "entities_redacted": 1
+  }
+}
 ```
 
 The same options apply to `transcribe()`. The policy names shown here are
@@ -159,7 +191,8 @@ illustrative; the supported list ships with the published API reference.
 
 ## Keyword boosting
 
-Bias recognition toward domain terms by passing up to 100 keywords:
+Bias recognition toward domain terms by passing up to 100 keywords with a
+combined limit of 4096 UTF-8 bytes:
 
 ```python
 session = client.connect(keywords=["dry van", "reefer", "LTL"])
@@ -172,10 +205,16 @@ Failures before the WebSocket upgrade raise typed exceptions:
 `AuthenticationError` (401/403), `RateLimitError` (429, with `retry_after`
 when the server supplies it), `ServiceUnavailableError` (5xx and transport
 failures, including connect and transcribe timeouts). In-band protocol
-errors are delivered as `ErrorEvent` values from `events()`, not raised;
+errors, including `transcript_too_large`, are delivered as `ErrorEvent` values
+from `events()`, not raised;
 when the server closes after one, the SDK raises `ConnectionClosedError`
 carrying that event. `events()` does not yield SessionOpened; it is
 available as `session.opened`:
+
+The SDK preserves the server error code as a string. Published codes include
+`invalid_params`, `invalid_message`, `invalid_frame`, `idle_timeout`,
+`identity_revalidation_failed`, `upstream_unavailable`,
+`transcript_too_large`, and `internal_error`.
 
 ```python
 from bw_stt import ConnectionClosedError, ErrorEvent, RateLimitError
@@ -202,7 +241,8 @@ Opus is different: send exactly one raw encoder packet per `send_audio()`
 call. The SDK sends `KeepAlive` automatically during send-side quiet
 (`keepalive_interval`, default 25 s) to stay inside the 60 s idle deadline;
 pass `None` or `0` to disable it. `connect()` waits up to `connect_timeout`
-seconds (default 15) for the session to open.
+seconds (default 15) for the session to open. A failed final delivery is
+reported by `SessionClosed.delivery_failed`.
 
 ## Overriding the endpoint
 

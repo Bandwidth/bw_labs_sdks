@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { BwSttClient } from "../src/client";
 import { AuthenticationError, ConnectionClosedError } from "../src/errors";
-import type { Segment, SttEvent } from "../src/events";
+import type { Segment, SttEvent, Transcript } from "../src/events";
 import type { ErrorEvent as SttErrorEvent } from "../src/events";
 import { buildWav, pcmBytes } from "./helpers/audio";
 import { MockSttServer, waitFor } from "./helpers/mock-server";
@@ -45,6 +45,25 @@ function segmentEvent(text: string, start = 0): Record<string, unknown> {
       .trim()
       .split(" ")
       .map((word, index) => ({ word, start: start + index * 0.05, end: start + index * 0.05 + 0.04 })),
+  };
+}
+
+function transcriptEvent(
+  channel: number,
+  text: string,
+  options: { applied?: boolean; entities?: number } = {},
+): Record<string, unknown> {
+  const applied = options.applied ?? false;
+  return {
+    type: "Transcript",
+    channel,
+    text,
+    words: text === "" ? [] : [{ word: text, start: 0, end: 0.2 }],
+    redaction: {
+      applied,
+      policies: applied ? ["ssn"] : [],
+      entities_redacted: options.entities ?? 0,
+    },
   };
 }
 
@@ -230,6 +249,19 @@ describe("event delivery", () => {
     session.sendAudio(pcmBytes(5120));
     const closed = await session.closeStream();
     expect(closed.type).toBe("SessionClosed");
+  });
+
+  it("surfaces transcript_too_large as an in-band Error event", async () => {
+    const server = await startServer();
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect();
+    const errors: SttErrorEvent[] = [];
+    session.on("error", (event) => errors.push(event));
+    const connection = await server.waitForConnection();
+    connection.send({ type: "Error", code: "transcript_too_large", message: "too large" });
+    await waitFor(() => errors.length === 1);
+    expect(errors[0]!.code).toBe("transcript_too_large");
+    await session.closeStream();
   });
 
   it("passes unknown event types through events() and on(event)", async () => {
@@ -427,6 +459,77 @@ describe("finalize", () => {
     const connection = await server.waitForConnection();
     await waitFor(() => connection.finalizes === 1);
     session.disconnect();
+  });
+
+  it("waits for distinct per-cycle demand transcripts and calls transcript listeners", async () => {
+    const server = await startServer({
+      finalizeScript: (_connection, count) => [
+        transcriptEvent(0, count === 1 ? "first" : "second", count === 2 ? { applied: true, entities: 1 } : {}),
+      ],
+    });
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect({ mode: "demand" });
+    const seen: string[] = [];
+    session.on("transcript", (transcript) => seen.push(transcript.text));
+    const first = await session.finalizeTranscript();
+    const second = await session.finalizeTranscript();
+    expect(first.map((transcript) => transcript.text)).toEqual(["first"]);
+    expect(second.map((transcript) => transcript.text)).toEqual(["second"]);
+    expect(second[0]!.redaction.entitiesRedacted).toBe(1);
+    expect(seen).toEqual(["first", "second"]);
+    const connection = await server.waitForConnection();
+    expect(connection.finalizes).toBe(2);
+    session.disconnect();
+  });
+
+  it("returns an empty Transcript for an empty demand Finalize", async () => {
+    const server = await startServer({
+      finalizeScript: () => [transcriptEvent(0, "")],
+    });
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect({ mode: "demand" });
+    const result = await session.finalizeTranscript();
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ channel: 0, text: "", words: [] });
+    expect(result[0]!.redaction).toEqual({ applied: false, policies: [], entitiesRedacted: 0 });
+    session.disconnect();
+  });
+
+  it("times out when a demand Finalize has no Transcript response", async () => {
+    const server = await startServer();
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect({ mode: "demand" });
+    await expect(session.finalizeTranscript(30)).rejects.toThrow(/finalizeTranscript timed out/);
+    session.disconnect();
+  });
+
+  it("returns multichannel demand transcripts ordered by channel", async () => {
+    const server = await startServer({
+      finalizeScript: () => [transcriptEvent(1, "right"), transcriptEvent(0, "left")],
+    });
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect({ mode: "demand", channels: 2, multichannel: true });
+    const result: Transcript[] = await session.finalizeTranscript();
+    expect(result.map((transcript) => [transcript.channel, transcript.text])).toEqual([
+      [0, "left"],
+      [1, "right"],
+    ]);
+    session.disconnect();
+  });
+
+  it("delivers demand close remainder as Transcript before SessionClosed", async () => {
+    const server = await startServer({ closeScript: () => [transcriptEvent(0, "remainder")] });
+    const client = new BwSttClient({ apiKey: KEY, baseUrl: server.url });
+    const session = await client.connect({ mode: "demand" });
+    const seen: string[] = [];
+    session.on("transcript", (transcript) => seen.push(transcript.text));
+    const iterator = session.events();
+    const closed = await session.closeStream();
+    const events: SttEvent[] = [];
+    for await (const event of iterator) events.push(event);
+    expect(seen).toEqual(["remainder"]);
+    expect(closed.deliveryFailed).toBe(false);
+    expect(events.map((event) => event.type)).toEqual(["Transcript", "SessionClosed"]);
   });
 });
 
