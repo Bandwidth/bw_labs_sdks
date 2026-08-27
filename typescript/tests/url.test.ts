@@ -88,6 +88,13 @@ describe("buildListenUrl", () => {
     expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { keywords: ["\t\n"] })).toThrow(TypeError);
   });
 
+  it("rejects keyword lists over the combined UTF-8 byte cap", () => {
+    expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { keywords: ["a".repeat(4096)] })).not.toThrow();
+    expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { keywords: ["a".repeat(4095), "é"] })).toThrow(
+      /4096/,
+    );
+  });
+
   it("rejects invalid media combinations", () => {
     expect(() => buildListenUrl("wss://x", { sampleRate: 44100 })).toThrow(RangeError);
     expect(() => buildListenUrl("wss://x", { channels: 3 })).toThrow(RangeError);

@@ -18,6 +18,7 @@ from bw_stt import (
     Segment,
     ServiceUnavailableError,
     SessionClosed,
+    Transcript,
     TranscriptAssembler,
     UnknownEvent,
 )
@@ -26,6 +27,22 @@ from .conftest import ServerFactory, wait_until, write_wav
 from .mocks import DOC_SEGMENTS, Script
 
 AUDIO_160MS = b"\0" * 5120
+
+
+def transcript_event(
+    channel: int, text: str, *, applied: bool = False, entities: int = 0
+) -> dict[str, object]:
+    return {
+        "type": "Transcript",
+        "channel": channel,
+        "text": text,
+        "words": [] if not text else [{"word": text, "start": 0.0, "end": 0.2}],
+        "redaction": {
+            "applied": applied,
+            "policies": ["ssn"] if applied else [],
+            "entities_redacted": entities,
+        },
+    }
 
 
 def test_connect_sends_header_auth_and_params(mock_server: ServerFactory, api_key_env: str) -> None:
@@ -196,6 +213,91 @@ def test_finalize_flushes_segments(mock_server: ServerFactory, api_key_env: str)
     assert event.text == "i need"
 
 
+def test_demand_finalize_transcript_returns_each_cycle_and_calls_back(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    script = Script(
+        on_finalize_cycles=[
+            [transcript_event(0, "first")],
+            [transcript_event(0, "second", applied=True, entities=1)],
+        ],
+        on_close=[],
+    )
+    server = mock_server(script)
+    client = BwSttClient(base_url=server.url)
+    seen: list[str] = []
+    session = client.connect(mode="demand")
+    session.on_transcript(lambda transcript: seen.append(transcript.text))
+    first = session.finalize_transcript()
+    second = session.finalize_transcript()
+    assert [transcript.text for transcript in first] == ["first"]
+    assert [transcript.text for transcript in second] == ["second"]
+    assert second[0].redaction.entities_redacted == 1
+    assert seen == ["first", "second"]
+    assert server.recorder.finalizes == 2
+    session.close()
+
+
+def test_demand_empty_finalize_returns_empty_transcript(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(Script(on_finalize_cycles=[[transcript_event(0, "")]], on_close=[]))
+    client = BwSttClient(base_url=server.url)
+    with client.connect(mode="demand") as session:
+        result = session.finalize_transcript()
+    assert len(result) == 1
+    assert result[0].text == ""
+    assert result[0].words == ()
+    assert not result[0].redaction.applied
+
+
+def test_demand_finalize_transcript_timeout(mock_server: ServerFactory, api_key_env: str) -> None:
+    server = mock_server(Script(on_close=[]))
+    client = BwSttClient(base_url=server.url)
+    session = client.connect(mode="demand")
+    with pytest.raises(TimeoutError, match="finalize_transcript timed out"):
+        session.finalize_transcript(timeout=0.05)
+    session.close()
+
+
+def test_demand_multichannel_finalize_transcript_is_channel_ordered(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(
+        Script(
+            channels=2,
+            on_finalize_cycles=[
+                [transcript_event(1, "right"), transcript_event(0, "left")],
+            ],
+            on_close=[],
+        )
+    )
+    client = BwSttClient(base_url=server.url)
+    session = client.connect(mode="demand", channels=2, multichannel=True)
+    result = session.finalize_transcript()
+    assert [(transcript.channel, transcript.text) for transcript in result] == [
+        (0, "left"),
+        (1, "right"),
+    ]
+    session.close()
+
+
+def test_demand_close_stream_delivers_transcript_before_session_closed(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(Script(on_close=[transcript_event(0, "remainder")]))
+    client = BwSttClient(base_url=server.url)
+    seen: list[str] = []
+    with client.connect(mode="demand") as session:
+        session.on_transcript(lambda transcript: seen.append(transcript.text))
+        closed = session.close_stream()
+        events = list(session.events())
+    assert closed.delivery_failed is False
+    assert seen == ["remainder"]
+    assert [type(event).__name__ for event in events] == ["Transcript", "SessionClosed"]
+    assert isinstance(events[0], Transcript)
+
+
 def test_error_event_then_close_carries_error(mock_server: ServerFactory, api_key_env: str) -> None:
     script = Script(
         after_open=[{"type": "Error", "code": "idle_timeout", "message": "no audio"}],
@@ -212,6 +314,23 @@ def test_error_event_then_close_carries_error(mock_server: ServerFactory, api_ke
         next(events)
     assert excinfo.value.error_event is event
     assert "idle_timeout" in str(excinfo.value)
+
+
+def test_transcript_too_large_is_an_in_band_error_event(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    script = Script(
+        after_open=[{"type": "Error", "code": "transcript_too_large", "message": "too large"}],
+        close_after_open_events=True,
+    )
+    server = mock_server(script)
+    session = BwSttClient(base_url=server.url).connect()
+    events = session.events()
+    event = next(events)
+    assert isinstance(event, ErrorEvent)
+    assert event.code == "transcript_too_large"
+    with pytest.raises(ConnectionClosedError):
+        next(events)
 
 
 def test_unknown_event_passthrough(mock_server: ServerFactory, api_key_env: str) -> None:

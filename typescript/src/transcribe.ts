@@ -21,7 +21,8 @@ export interface TranscriptionSegment {
 
 /**
  * Result of an offline transcription. Wire mapping: `request_id` -> requestId,
- * `audio_duration_seconds` -> audioDurationSeconds. `words` may be empty.
+ * `audio_duration_seconds` -> audioDurationSeconds, `model_info` -> modelInfo.
+ * `words` may be empty.
  * `raw` preserves the full response body for fields this SDK version does not
  * model.
  */
@@ -31,6 +32,7 @@ export interface Transcription {
   readonly words: readonly Word[];
   readonly segments: readonly TranscriptionSegment[];
   readonly audioDurationSeconds: number;
+  readonly modelInfo: Record<string, unknown>;
   readonly raw: Record<string, unknown>;
 }
 
@@ -138,6 +140,10 @@ function parseTranscription(payload: unknown): Transcription {
   if (typeof raw.audio_duration_seconds !== "number") {
     throw new ProtocolError("transcribe response is missing audio_duration_seconds");
   }
+  const modelInfo = raw.model_info;
+  if (modelInfo !== undefined && (modelInfo === null || typeof modelInfo !== "object" || Array.isArray(modelInfo))) {
+    throw new ProtocolError("transcribe response model_info is not an object");
+  }
   const rawWords = raw.words ?? [];
   if (!Array.isArray(rawWords)) throw new ProtocolError("transcribe response words is not an array");
   const words: Word[] = rawWords.map((entry, index) => {
@@ -170,6 +176,7 @@ function parseTranscription(payload: unknown): Transcription {
     words,
     segments,
     audioDurationSeconds: raw.audio_duration_seconds,
+    modelInfo: modelInfo === undefined ? {} : (modelInfo as Record<string, unknown>),
     raw,
   };
 }

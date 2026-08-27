@@ -32,6 +32,20 @@ describe("parseEvent", () => {
     });
   });
 
+  it("parses Transcript words and redaction summary", () => {
+    const event = parseEvent(
+      '{"type":"Transcript","channel":1,"text":"hello","words":[{"word":"hello","start":0,"end":0.4}],"redaction":{"applied":true,"policies":["ssn"],"entities_redacted":1}}',
+    );
+    expect(event).toMatchObject({
+      type: "Transcript",
+      channel: 1,
+      text: "hello",
+      words: [{ word: "hello", start: 0, end: 0.4 }],
+      redaction: { applied: true, policies: ["ssn"], entitiesRedacted: 1 },
+    });
+    if (event.type === "Transcript") expect(event.redaction.entitiesRedacted).toBe(1);
+  });
+
   it("maps SessionClosed billing fields to camelCase", () => {
     const event = parseEvent(
       '{"type":"SessionClosed","request_id":"abc","audio_duration_seconds":184.32,"session_duration_seconds":190.11}',
@@ -41,12 +55,25 @@ describe("parseEvent", () => {
       requestId: "abc",
       audioDurationSeconds: 184.32,
       sessionDurationSeconds: 190.11,
+      deliveryFailed: false,
     });
+  });
+
+  it("maps a failed SessionClosed delivery flag", () => {
+    const event = parseEvent(
+      '{"type":"SessionClosed","request_id":"abc","audio_duration_seconds":1,"session_duration_seconds":2,"delivery_failed":true}',
+    );
+    expect(event).toMatchObject({ type: "SessionClosed", deliveryFailed: true });
   });
 
   it("parses Error events", () => {
     const event = parseEvent('{"type":"Error","code":"invalid_frame","message":"bad duration"}');
     expect(event).toMatchObject({ type: "Error", code: "invalid_frame", message: "bad duration" });
+  });
+
+  it("keeps transcript_too_large as an in-band Error event", () => {
+    const event = parseEvent('{"type":"Error","code":"transcript_too_large","message":"too large"}');
+    expect(event).toMatchObject({ type: "Error", code: "transcript_too_large" });
   });
 
   it("surfaces unknown event types with the wire type and full raw payload", () => {

@@ -30,6 +30,7 @@ _WS_SCHEMES = {"ws": "ws", "wss": "wss", "http": "ws", "https": "wss"}
 _HTTP_SCHEMES = {"ws": "http", "wss": "https", "http": "http", "https": "https"}
 
 MAX_KEYWORDS = 100
+MAX_KEYWORD_BYTES = 4096
 
 ENCODINGS = frozenset({"linear16", "mulaw", "alaw", "g722", "opus"})
 SAMPLE_RATES = frozenset({8000, 16000})
@@ -77,9 +78,15 @@ class SessionParams:
         if self.keywords is not None:
             if len(self.keywords) > MAX_KEYWORDS:
                 raise ValueError(f"at most {MAX_KEYWORDS} keywords are allowed")
+            keyword_bytes = 0
             for keyword in self.keywords:
                 if not isinstance(keyword, str) or not keyword.strip():
                     raise ValueError("keywords must be non-empty strings")
+                keyword_bytes += len(keyword.encode("utf-8"))
+            if keyword_bytes > MAX_KEYWORD_BYTES:
+                raise ValueError(
+                    f"keywords must fit within {MAX_KEYWORD_BYTES} UTF-8 bytes combined"
+                )
 
     def query(self, *, transcribe_raw: bool | None = None) -> list[tuple[str, str]]:
         """Return query parameters for listen or the confirmed transcribe contract.

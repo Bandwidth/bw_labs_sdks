@@ -22,6 +22,8 @@ export interface MockServerOptions {
   rejectUpgrade?: { status: number; message?: string; headers?: Record<string, string> };
   /** Called for every binary audio frame. */
   onAudio?: (connection: MockConnection, frame: Buffer) => void;
+  /** Events sent for each Finalize, with the one-based Finalize count. */
+  finalizeScript?: (connection: MockConnection, finalizeCount: number) => Record<string, unknown>[];
   /** Extra events sent after CloseStream, before SessionClosed. */
   closeScript?: (connection: MockConnection) => Record<string, unknown>[];
   /** Suppress the automatic SessionOpened. */
@@ -73,7 +75,12 @@ export class MockSttServer {
         }
         const message = JSON.parse(data.toString()) as { type: string };
         if (message.type === "KeepAlive") connection.keepAlives += 1;
-        else if (message.type === "Finalize") connection.finalizes += 1;
+        else if (message.type === "Finalize") {
+          connection.finalizes += 1;
+          for (const event of options.finalizeScript?.(connection, connection.finalizes) ?? []) {
+            connection.send(event);
+          }
+        }
         else if (message.type === "CloseStream") {
           for (const event of options.closeScript?.(connection) ?? []) connection.send(event);
           const audioSeconds = connection.audioBytes / bytesPerSecond(query);

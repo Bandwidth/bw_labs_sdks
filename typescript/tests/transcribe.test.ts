@@ -153,6 +153,7 @@ describe("transcribe", () => {
     expect(result.words).toHaveLength(2);
     expect(result.segments).toEqual([{ start: 0.0, end: 0.5, text: "i need a dry van" }]);
     expect(result.audioDurationSeconds).toBe(0.5);
+    expect(result.modelInfo).toEqual({ name: "bw-streaming-en", version: "current" });
     expect(result.raw.pii_entities).toEqual([{ type: "ssn", start: 0.1, end: 0.2 }]);
   });
 

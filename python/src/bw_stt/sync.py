@@ -15,7 +15,7 @@ from . import _http
 from ._framing import FrameChunker, iter_raw_chunks, iter_wav_chunks
 from ._wire import DEFAULT_BASE_URL
 from .aio import AsyncBwSttClient, AsyncSession, _resolve_api_key
-from .events import Event, Segment, SessionClosed, SessionOpened, Transcription
+from .events import Event, Segment, SessionClosed, SessionOpened, Transcript, Transcription
 
 __all__ = ["BwSttClient", "Session"]
 
@@ -196,9 +196,9 @@ class BwSttClient:
 class Session:
     """Synchronous view of one live streaming session.
 
-    ``on_segment`` callbacks run on the thread that consumes results (during
-    iteration, ``events()``, or the ``close_stream()`` drain), so a callback
-    may call any Session method.
+    ``on_segment`` and ``on_transcript`` callbacks run on the thread that
+    consumes results (during iteration, ``events()``, or the ``close_stream()``
+    drain), so a callback may call any Session method.
     """
 
     def __init__(self, inner: AsyncSession, runner: _EventLoopThread, client: BwSttClient) -> None:
@@ -208,6 +208,7 @@ class Session:
         # as long as any of its sessions exists
         self._client = client
         self._callbacks: list[Callable[[Segment], object]] = []
+        self._transcript_callbacks: list[Callable[[Transcript], object]] = []
 
     @property
     def opened(self) -> SessionOpened:
@@ -224,16 +225,27 @@ class Session:
         self._runner.call(self._inner.send_audio(data))
 
     def finalize(self) -> None:
-        """Flush buffered audio now; the session stays open, results follow as Segments."""
+        """Flush buffered audio now without waiting for the server's results."""
         self._runner.call(self._inner.finalize())
+
+    def finalize_transcript(self, timeout: float = 30.0) -> list[Transcript]:
+        """Flush audio and wait for one demand-mode Transcript per channel.
+
+        The returned list is ordered by channel. Use :meth:`finalize` when no
+        response wait is desired.
+        """
+        transcripts = self._runner.call(self._inner.finalize_transcript(timeout))
+        for transcript in transcripts:
+            self._dispatch(transcript)
+        return transcripts
 
     def close_stream(self) -> SessionClosed:
         """End the session gracefully and return the terminal SessionClosed.
 
-        Remaining events are drained: final Segments are dispatched to
-        ``on_segment`` callbacks on the way, and every drained event stays
-        available from :meth:`events` afterwards (yielded without a second
-        callback dispatch).
+        Remaining results are drained and dispatched to their callbacks on the
+        way. Instant sessions drain Segments; demand sessions drain
+        Transcripts. Every drained event stays available from :meth:`events`
+        afterwards (yielded without a second callback dispatch).
         """
         replay = self._inner._replay
         drained_from = len(replay)
@@ -251,10 +263,17 @@ class Session:
         """Invoke ``callback`` for every Segment as events are consumed or drained."""
         self._callbacks.append(callback)
 
+    def on_transcript(self, callback: Callable[[Transcript], object]) -> None:
+        """Invoke ``callback`` for every demand-mode Transcript event."""
+        self._transcript_callbacks.append(callback)
+
     def _dispatch(self, event: Event) -> None:
         if isinstance(event, Segment):
             for callback in tuple(self._callbacks):
                 callback(event)
+        elif isinstance(event, Transcript):
+            for transcript_callback in tuple(self._transcript_callbacks):
+                transcript_callback(event)
 
     def events(self) -> Iterator[Event]:
         """Yield events until SessionClosed; raise ConnectionClosedError on failure.

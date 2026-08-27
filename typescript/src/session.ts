@@ -7,7 +7,7 @@ import {
   RateLimitError,
   ServiceUnavailableError,
 } from "./errors";
-import type { ErrorEvent, Segment, SessionClosed, SessionOpened, SttEvent } from "./events";
+import type { ErrorEvent, Segment, SessionClosed, SessionOpened, SttEvent, Transcript } from "./events";
 import { parseEvent } from "./events";
 import type { FrameConfig } from "./framing";
 import { FrameChunker, toUint8Array, validateFrame } from "./framing";
@@ -22,6 +22,7 @@ const DRAIN_POLL_MS = 10;
 
 export interface SessionEventMap {
   segment: Segment;
+  transcript: Transcript;
   error: ErrorEvent;
   closed: SessionClosed;
   event: SttEvent;
@@ -89,6 +90,12 @@ class EventQueue {
     const drained = this.buffered;
     this.buffered = [];
     return drained;
+  }
+
+  cancel(): void {
+    const waiter = this.waiter;
+    this.waiter = undefined;
+    waiter?.resolve({ value: undefined, done: true });
   }
 
   next(): Promise<IteratorResult<SttEvent>> {
@@ -161,6 +168,47 @@ export class SttSession {
     this.send(JSON.stringify({ type: "Finalize" }));
   }
 
+  /** Send Finalize and wait for one demand-mode Transcript per channel. */
+  async finalizeTranscript(timeoutMs = 30_000): Promise<Transcript[]> {
+    this.ensureOpen();
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError("timeoutMs must be a positive finite number");
+    }
+    const queue = this.subscribe();
+    const transcripts = new Map<number, Transcript>();
+    const deadline = Date.now() + timeoutMs;
+    try {
+      this.send(JSON.stringify({ type: "Finalize" }));
+      while (transcripts.size < this.opened.channels) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          throw new Error(`finalizeTranscript timed out after ${timeoutMs} ms`);
+        }
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`finalizeTranscript timed out after ${timeoutMs} ms`)), remaining);
+        });
+        let result: IteratorResult<SttEvent>;
+        try {
+          result = await Promise.race([queue.next(), timeout]);
+        } finally {
+          if (timer !== undefined) clearTimeout(timer);
+        }
+        if (result.done) {
+          throw this.failure ?? new ConnectionClosedError("connection closed before demand transcripts");
+        }
+        if (result.value.type === "Transcript") {
+          transcripts.set(result.value.channel, result.value);
+        } else if (result.value.type === "SessionClosed") {
+          throw new ConnectionClosedError("connection closed before demand transcripts");
+        }
+      }
+      return [...transcripts.values()].sort((left, right) => left.channel - right.channel);
+    } finally {
+      this.unsubscribe(queue);
+    }
+  }
+
   /**
    * Send arbitrarily sized audio chunks. Bytes are re-cut into exact 160 ms
    * frames with a final 20-160 ms tail. Yields segments as they arrive while
@@ -205,7 +253,7 @@ export class SttSession {
   }
 
   /**
-   * Graceful shutdown: sends CloseStream, drains remaining Segments (delivered
+   * Graceful shutdown: sends CloseStream, drains remaining results (delivered
    * to listeners and iterators), and resolves with the terminal SessionClosed.
    */
   closeStream(): Promise<SessionClosed> {
@@ -344,6 +392,7 @@ export class SttSession {
     }
     this.emit("event", event);
     if (event.type === "Segment") this.emit("segment", event);
+    else if (event.type === "Transcript") this.emit("transcript", event);
     else if (event.type === "Error") this.emit("error", event);
     else if (event.type === "SessionClosed") this.emit("closed", event);
   }
@@ -437,6 +486,7 @@ export class SttSession {
 
   private unsubscribe(queue: EventQueue): void {
     this.queues.delete(queue);
+    queue.cancel();
   }
 
   private async *consumeQueue(queue: EventQueue): AsyncIterableIterator<SttEvent> {

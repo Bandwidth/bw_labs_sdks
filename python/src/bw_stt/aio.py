@@ -39,6 +39,7 @@ from .events import (
     Segment,
     SessionClosed,
     SessionOpened,
+    Transcript,
     Transcription,
     parse_event,
 )
@@ -46,6 +47,7 @@ from .events import (
 __all__ = ["AsyncBwSttClient", "AsyncSession"]
 
 SegmentCallback = Callable[[Segment], object]
+TranscriptCallback = Callable[[Transcript], object]
 
 _EOF = object()
 
@@ -242,6 +244,7 @@ class AsyncSession:
         self._replay: deque[Event] = deque()
         self._send_lock = asyncio.Lock()
         self._callbacks: list[SegmentCallback] = []
+        self._transcript_callbacks: list[TranscriptCallback] = []
         self._last_send = time.monotonic()
         self._last_error: ErrorEvent | None = None
         self._session_closed: SessionClosed | None = None
@@ -311,6 +314,11 @@ class AsyncSession:
                 result = callback(event)
                 if inspect.isawaitable(result):
                     await result
+        elif isinstance(event, Transcript):
+            for transcript_callback in tuple(self._transcript_callbacks):
+                result = transcript_callback(event)
+                if inspect.isawaitable(result):
+                    await result
         return event
 
     async def _next_event(self) -> Event | None:
@@ -348,16 +356,43 @@ class AsyncSession:
         await self._send(data)
 
     async def finalize(self) -> None:
-        """Flush buffered audio now; the session stays open, results follow as Segments."""
+        """Flush buffered audio now without waiting for the server's results."""
         await self._send(FINALIZE_JSON)
+
+    async def finalize_transcript(self, timeout: float = 30.0) -> list[Transcript]:
+        """Flush audio and wait for one demand-mode Transcript per channel.
+
+        The returned list is ordered by channel. This method waits for the
+        response to this Finalize only; use :meth:`finalize` when no response
+        wait is desired.
+        """
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
+        await self.finalize()
+        try:
+            return await asyncio.wait_for(self._collect_transcripts(), timeout)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(f"finalize_transcript timed out after {timeout:g}s") from exc
+
+    async def _collect_transcripts(self) -> list[Transcript]:
+        transcripts: dict[int, Transcript] = {}
+        while len(transcripts) < self.opened.channels:
+            event = await self._next_event()
+            if event is None or isinstance(event, SessionClosed):
+                raise ConnectionClosedError(
+                    "connection closed before demand transcripts", error_event=self._last_error
+                )
+            if isinstance(event, Transcript):
+                transcripts[event.channel] = event
+        return [transcripts[channel] for channel in sorted(transcripts)]
 
     async def close_stream(self) -> SessionClosed:
         """End the session gracefully and return the terminal SessionClosed.
 
-        Remaining events are drained: final Segments are dispatched to
-        ``on_segment`` callbacks on the way, and every drained event stays
-        available from :meth:`events` afterwards (yielded without a second
-        callback dispatch).
+        Remaining results are drained and dispatched to their callbacks on the
+        way. Instant sessions drain Segments; demand sessions drain
+        Transcripts. Every drained event stays available from :meth:`events`
+        afterwards (yielded without a second callback dispatch).
         """
         if self._session_closed is not None:
             await self.close()
@@ -404,6 +439,10 @@ class AsyncSession:
     def on_segment(self, callback: SegmentCallback) -> None:
         """Invoke ``callback`` for every Segment as events are consumed or drained."""
         self._callbacks.append(callback)
+
+    def on_transcript(self, callback: TranscriptCallback) -> None:
+        """Invoke ``callback`` for every demand-mode Transcript event."""
+        self._transcript_callbacks.append(callback)
 
     async def events(self) -> AsyncIterator[Event]:
         """Yield events until SessionClosed; raise ConnectionClosedError on failure.

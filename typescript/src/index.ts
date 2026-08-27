@@ -4,11 +4,13 @@ export { SttSession } from "./session";
 export type { SessionEventMap } from "./session";
 export type {
   ErrorEvent,
+  RedactionSummary,
   Segment,
   SessionClosed,
   SessionOpened,
   SttErrorCode,
   SttEvent,
+  Transcript,
   UnknownEvent,
   Word,
 } from "./events";

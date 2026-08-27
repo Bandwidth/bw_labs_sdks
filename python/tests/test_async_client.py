@@ -18,6 +18,7 @@ from bw_stt import (
     Segment,
     ServiceUnavailableError,
     SessionClosed,
+    Transcript,
     TranscriptAssembler,
     UnknownEvent,
     WordAssembler,
@@ -28,6 +29,23 @@ from .conftest import HttpServerFactory, ServerFactory
 from .mocks import DOC_SEGMENTS, Script
 
 AUDIO_160MS = b"\0" * 5120
+
+
+def transcript_event(
+    channel: int, text: str, *, applied: bool = False, entities: int = 0
+) -> dict[str, object]:
+    return {
+        "type": "Transcript",
+        "channel": channel,
+        "text": text,
+        "words": [] if not text else [{"word": text, "start": 0.0, "end": 0.2}],
+        "redaction": {
+            "applied": applied,
+            "policies": ["ssn"] if applied else [],
+            "entities_redacted": entities,
+        },
+    }
+
 
 SESSION_OPENED_JSON = json.dumps(
     {
@@ -104,6 +122,28 @@ def test_async_error_event_then_close(mock_server: ServerFactory, api_key_env: s
     asyncio.run(scenario())
 
 
+def test_async_transcript_too_large_is_an_in_band_error_event(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    script = Script(
+        after_open=[{"type": "Error", "code": "transcript_too_large", "message": "too large"}],
+        close_after_open_events=True,
+    )
+    server = mock_server(script)
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect()
+        iterator = session.events()
+        event = await iterator.__anext__()
+        assert isinstance(event, ErrorEvent)
+        assert event.code == "transcript_too_large"
+        with pytest.raises(ConnectionClosedError):
+            await iterator.__anext__()
+
+    asyncio.run(scenario())
+
+
 def test_async_stream_chunks(mock_server: ServerFactory, api_key_env: str) -> None:
     script = Script(segments_per_frame={1: [dict(DOC_SEGMENTS[0])]})
     server = mock_server(script)
@@ -125,6 +165,114 @@ def test_async_stream_chunks(mock_server: ServerFactory, api_key_env: str) -> No
 
     asyncio.run(scenario())
     assert [len(f) for f in server.recorder.frames] == [5120, 640]
+
+
+def test_async_demand_finalize_transcript_returns_each_cycle_and_calls_back(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    script = Script(
+        on_finalize_cycles=[
+            [transcript_event(0, "first")],
+            [transcript_event(0, "second", applied=True, entities=1)],
+        ],
+        on_close=[],
+    )
+    server = mock_server(script)
+    seen: list[str] = []
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect(mode="demand")
+        session.on_transcript(lambda transcript: seen.append(transcript.text))
+        first = await session.finalize_transcript()
+        second = await session.finalize_transcript()
+        assert [transcript.text for transcript in first] == ["first"]
+        assert [transcript.text for transcript in second] == ["second"]
+        assert second[0].redaction.entities_redacted == 1
+        await session.close()
+
+    asyncio.run(scenario())
+    assert seen == ["first", "second"]
+    assert server.recorder.finalizes == 2
+
+
+def test_async_demand_empty_finalize_returns_empty_transcript(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(Script(on_finalize_cycles=[[transcript_event(0, "")]], on_close=[]))
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect(mode="demand")
+        result = await session.finalize_transcript()
+        assert len(result) == 1
+        assert result[0].text == ""
+        assert result[0].words == ()
+        assert not result[0].redaction.applied
+        await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_demand_finalize_transcript_timeout(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(Script(on_close=[]))
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect(mode="demand")
+        with pytest.raises(TimeoutError, match="finalize_transcript timed out"):
+            await session.finalize_transcript(timeout=0.05)
+        await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_demand_multichannel_finalize_transcript_is_channel_ordered(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(
+        Script(
+            channels=2,
+            on_finalize_cycles=[
+                [transcript_event(1, "right"), transcript_event(0, "left")],
+            ],
+            on_close=[],
+        )
+    )
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect(mode="demand", channels=2, multichannel=True)
+        result = await session.finalize_transcript()
+        assert [(transcript.channel, transcript.text) for transcript in result] == [
+            (0, "left"),
+            (1, "right"),
+        ]
+        await session.close()
+
+    asyncio.run(scenario())
+
+
+def test_async_demand_close_stream_delivers_transcript_before_session_closed(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server(Script(on_close=[transcript_event(0, "remainder")]))
+    seen: list[str] = []
+
+    async def scenario() -> None:
+        client = AsyncBwSttClient(base_url=server.url)
+        session = await client.connect(mode="demand")
+        session.on_transcript(lambda transcript: seen.append(transcript.text))
+        closed = await session.close_stream()
+        events = [event async for event in session.events()]
+        assert closed.delivery_failed is False
+        assert [type(event).__name__ for event in events] == ["Transcript", "SessionClosed"]
+        assert isinstance(events[0], Transcript)
+
+    asyncio.run(scenario())
+    assert seen == ["remainder"]
 
 
 def test_async_stream_file(mock_server: ServerFactory, api_key_env: str, wav_file: Path) -> None:
@@ -286,6 +434,7 @@ def test_async_transcribe(mock_http_server: HttpServerFactory, api_key_env: str)
         assert result.text == "i need a dry van"
         assert result.segments[0].text == "i need a dry van"
         assert result.audio_duration_seconds == 2.5
+        assert result.model_info == {"name": "bw-streaming-en", "version": "current"}
 
     asyncio.run(scenario())
     assert server.recorder.body == b"\0" * 32000

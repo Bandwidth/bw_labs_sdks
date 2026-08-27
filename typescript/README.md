@@ -38,9 +38,15 @@ Instant and demand are modes of the `/audio/v1/listen` WebSocket endpoint.
 Offline transcription uses `POST /audio/v1/transcribe` over HTTP and is not a
 WebSocket session mode.
 
+| Mode | Delivery | Best for |
+|---|---|---|
+| `instant` (default) | Final `Segment` events arrive as audio is decoded. | Live captions and continuously updating displays |
+| `demand` | Each `Finalize` gets one `Transcript` per channel, including empty transcripts. `CloseStream` delivers the remainder the same way, then `SessionClosed`. | Voice-agent turns and application-controlled boundaries |
+
 ### Instant
 
-The default. `Segment` events stream back the moment text is decoded. Every segment is final and append-only; there are no interim results to reconcile.
+The default. `Segment` events stream back the moment text is decoded. Every
+segment is final and append-only; there are no interim results to reconcile.
 
 ```ts
 const session = await client.connect(); // mode: "instant" is the server default
@@ -49,14 +55,27 @@ session.on("segment", (segment) => render(segment));
 
 ### Demand
 
-The same wire protocol, but results are held until you ask for them. Feed audio continuously and call `finalize()` when you want the transcript so far, or `closeStream()` for everything at the end. Useful when you only need text at known points, such as the end of a caller turn.
+Demand buffers finalized results server-side. Each `Finalize` gets one
+`Transcript` per channel, even when that channel is empty. `CloseStream`
+delivers the remainder as `Transcript` events, then sends `SessionClosed`.
+Demand never sends `Segment` events.
 
 ```ts
 const session = await client.connect({ mode: "demand" });
-session.sendAudio(frame);       // keep feeding audio; nothing streams back yet
-session.finalize();             // results for audio so far arrive as Segment events
-const closed = await session.closeStream(); // flushes the rest, then SessionClosed
+for (const turnFrames of callerTurns) {
+  for (const frame of turnFrames) session.sendAudio(frame);
+  const transcripts = await session.finalizeTranscript();
+  const turnText = transcripts.map((transcript) => transcript.text).join(" ");
+  answerTurn(turnText);
+}
+
+const closed = await session.closeStream(); // remainder Transcripts, then SessionClosed
 ```
+
+Use `finalize()` instead when the control message should be fire-and-forget.
+For an instant versus demand comparison, use `Segment` callbacks for
+continuously arriving final pieces, or `Transcript` callbacks and
+`finalizeTranscript()` for application-controlled voice-agent turns.
 
 ### Offline transcribe
 
@@ -142,17 +161,39 @@ Ask the service to redact personally identifiable information in results:
 
 ```ts
 const session = await client.connect({
+  mode: "demand",
   redactPii: true,
   redactPiiPolicies: ["ssn", "credit_card"], // optional policy selection
   redactPiiSub: "entity_name",               // or "hash"
 });
+const transcripts = await session.finalizeTranscript();
+for (const transcript of transcripts) {
+  console.log(transcript.text, transcript.redaction);
+}
+```
+
+A demand `Transcript` includes a redaction summary:
+
+```json
+{
+  "type": "Transcript",
+  "channel": 0,
+  "text": "my number is [ssn]",
+  "words": [],
+  "redaction": {
+    "applied": true,
+    "policies": ["ssn"],
+    "entities_redacted": 1
+  }
+}
 ```
 
 The policy names above are illustrative; consult the API reference for the published list. The same options work on `transcribe` and `transcribeFile`.
 
 ## Keyword boosting
 
-Boost recognition of up to 100 domain terms:
+Boost recognition of up to 100 domain terms with a combined limit of 4096 UTF-8
+bytes:
 
 ```ts
 const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul"] });
@@ -162,7 +203,12 @@ const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul
 
 Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and timeouts. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
 
-In-band `Error` events do not throw; they arrive through `session.on("error", ...)` and `session.events()`. If the connection then drops before `SessionClosed`, pending iterators and `closeStream()` reject with a `ConnectionClosedError` whose `lastErrorEvent` carries that event.
+In-band `Error` events, including `transcript_too_large`, do not throw; they
+arrive through `session.on("error", ...)` and `session.events()`. If the
+connection then drops before `SessionClosed`, pending iterators and
+`closeStream()` reject with a `ConnectionClosedError` whose `lastErrorEvent`
+carries that event. A failed final delivery is reported by
+`SessionClosed.deliveryFailed`.
 
 ```ts
 import { RateLimitError } from "@bandwidth/bw-stt";
@@ -177,8 +223,17 @@ try {
 
 There is no resume protocol: after an unexpected close, connect again and decide what audio to resend.
 
-Invalid local input (bad frame sizes, misaligned samples, too many keywords) throws plain `RangeError` or `TypeError` at the call site.
+Invalid local input (bad frame sizes, misaligned samples, too many keywords, or
+more than 4096 combined keyword bytes) throws plain `RangeError` or `TypeError`
+at the call site.
 
 ## Events
 
-All server events are available as a typed union via `session.events()` or `session.on("event", ...)`. `events()` does not yield `SessionOpened`: it is consumed by the connect handshake and available as `session.opened`. Field names are camelCase mappings of the wire names (`audio_duration_seconds` becomes `audioDurationSeconds`), and every event keeps the original payload on `.raw`. Event types this SDK does not know yet are surfaced as `UnknownEvent` rather than dropped.
+All server events are available as a typed union via `session.events()` or
+`session.on("event", ...)`. Demand `Transcript` events are also available via
+`session.on("transcript", ...)`. `events()` does not yield `SessionOpened`: it
+is consumed by the connect handshake and available as `session.opened`. Field
+names are camelCase mappings of the wire names (`audio_duration_seconds`
+becomes `audioDurationSeconds`), and every event keeps the original payload on
+`.raw`. Event types this SDK does not know yet are surfaced as `UnknownEvent`
+rather than dropped.

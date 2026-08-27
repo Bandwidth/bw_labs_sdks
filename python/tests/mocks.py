@@ -61,8 +61,10 @@ class Script:
     close_after_open_events: bool = False
     segments_per_frame: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
     on_finalize: list[dict[str, Any]] = field(default_factory=list)
+    on_finalize_cycles: list[list[dict[str, Any]]] = field(default_factory=list)
     on_close: list[dict[str, Any]] = field(default_factory=lambda: [dict(s) for s in DOC_SEGMENTS])
     request_id: str = "req-1"
+    channels: int = 1
 
 
 @dataclass
@@ -141,7 +143,7 @@ class MockSttServer:
                 "type": "SessionOpened",
                 "request_id": script.request_id,
                 "model_info": {"name": "bw-streaming-en", "version": "current"},
-                "channels": 1,
+                "channels": script.channels,
                 "sample_rate": 16000,
                 "encoding": "linear16",
             },
@@ -165,7 +167,11 @@ class MockSttServer:
                 recorder.keepalives += 1
             elif control_type == "Finalize":
                 recorder.finalizes += 1
-                for event in script.on_finalize:
+                events = script.on_finalize
+                cycle_index = recorder.finalizes - 1
+                if cycle_index < len(script.on_finalize_cycles):
+                    events = script.on_finalize_cycles[cycle_index]
+                for event in events:
                     await self._send_json(connection, event)
             elif control_type == "CloseStream":
                 for event in script.on_close:
