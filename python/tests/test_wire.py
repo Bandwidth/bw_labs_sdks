@@ -50,17 +50,46 @@ def test_pii_params() -> None:
         redact_pii=True,
         redact_pii_policies=["ssn", "credit_card"],
         redact_pii_sub="hash",
+        redact_pii_return=True,
     )
     query = dict(query_of(build_ws_url(BASE, params)))
     assert query["redact_pii"] == "true"
     assert query["redact_pii_policies"] == "ssn,credit_card"
     assert query["redact_pii_sub"] == "hash"
+    assert query["redact_pii_return"] == "true"
+
+
+def test_pii_return_uses_server_default_hash_substitution() -> None:
+    query = dict(
+        query_of(build_ws_url(BASE, SessionParams(redact_pii=True, redact_pii_return=True)))
+    )
+    assert query["redact_pii"] == "true"
+    assert query["redact_pii_return"] == "true"
+    assert "redact_pii_sub" not in query
 
 
 def test_pii_params_absent_by_default() -> None:
     query = dict(query_of(build_ws_url(BASE, SessionParams())))
-    for name in ("redact_pii", "redact_pii_policies", "redact_pii_sub", "keywords"):
+    for name in (
+        "redact_pii",
+        "redact_pii_policies",
+        "redact_pii_sub",
+        "redact_pii_return",
+        "keywords",
+    ):
         assert name not in query
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"redact_pii_return": True},
+        {"redact_pii": True, "redact_pii_return": True, "redact_pii_sub": "entity_name"},
+    ],
+)
+def test_pii_return_validation(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="redact_pii"):
+        SessionParams(**kwargs)  # type: ignore[arg-type]
 
 
 def test_keywords_repeated_and_encoded() -> None:

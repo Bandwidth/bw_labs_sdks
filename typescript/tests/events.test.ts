@@ -46,6 +46,36 @@ describe("parseEvent", () => {
     if (event.type === "Transcript") expect(event.redaction.entitiesRedacted).toBe(1);
   });
 
+  it("parses redacted entities and preserves nullable timestamps", () => {
+    const event = parseEvent(
+      '{"type":"Transcript","channel":0,"text":"card hash:v1:9f2c41d08ab37e15","words":[],"redaction":{"applied":true,"policies":["credit_card"],"entities_redacted":1},"redacted_entities":[{"token":"hash:v1:9f2c41d08ab37e15","kind":"credit_card","text":"4111 1111 1111 1111","start":0.5,"end":1.2},{"token":"hash:v1:abc","kind":"ssn","text":"123-45-6789"}]}',
+    );
+    expect(event).toMatchObject({
+      type: "Transcript",
+      redactedEntities: [
+        {
+          token: "hash:v1:9f2c41d08ab37e15",
+          kind: "credit_card",
+          text: "4111 1111 1111 1111",
+          start: 0.5,
+          end: 1.2,
+        },
+        { token: "hash:v1:abc", kind: "ssn", text: "123-45-6789", start: null, end: null },
+      ],
+    });
+  });
+
+  it("distinguishes an absent redacted entity field from an empty array", () => {
+    const base =
+      '{"type":"Transcript","channel":0,"text":"hello","words":[],"redaction":{"applied":false,"policies":[],"entities_redacted":0}';
+    const absent = parseEvent(`${base}}`);
+    const empty = parseEvent(`${base},"redacted_entities":[]}`);
+    expect(absent.type).toBe("Transcript");
+    expect(empty.type).toBe("Transcript");
+    if (absent.type === "Transcript") expect(absent.redactedEntities).toBeUndefined();
+    if (empty.type === "Transcript") expect(empty.redactedEntities).toEqual([]);
+  });
+
   it("maps SessionClosed billing fields to camelCase", () => {
     const event = parseEvent(
       '{"type":"SessionClosed","request_id":"abc","audio_duration_seconds":184.32,"session_duration_seconds":190.11}',

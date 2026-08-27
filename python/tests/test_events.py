@@ -7,6 +7,7 @@ import pytest
 from bw_stt.errors import ProtocolError
 from bw_stt.events import (
     ErrorEvent,
+    RedactedEntity,
     RedactionSummary,
     Segment,
     SessionClosed,
@@ -75,6 +76,73 @@ def test_parse_transcript_with_redaction_summary() -> None:
     assert event.raw == payload
 
 
+def test_parse_transcript_with_redacted_entities() -> None:
+    payload = {
+        "type": "Transcript",
+        "channel": 0,
+        "text": "card hash:v1:9f2c41d08ab37e15",
+        "words": [],
+        "redaction": {"applied": True, "policies": ["credit_card"], "entities_redacted": 1},
+        "redacted_entities": [
+            {
+                "token": "hash:v1:9f2c41d08ab37e15",
+                "kind": "credit_card",
+                "text": "4111 1111 1111 1111",
+                "start": 0.5,
+                "end": 1.2,
+            }
+        ],
+    }
+    event = parse_event(json.dumps(payload))
+    assert isinstance(event, Transcript)
+    assert event.redacted_entities == (
+        RedactedEntity(
+            token="hash:v1:9f2c41d08ab37e15",
+            kind="credit_card",
+            text="4111 1111 1111 1111",
+            start=0.5,
+            end=1.2,
+        ),
+    )
+
+
+def test_parse_redacted_entity_missing_timestamps_as_none() -> None:
+    event = parse_event(
+        json.dumps(
+            {
+                "type": "Transcript",
+                "channel": 0,
+                "text": "hash:v1:abc",
+                "words": [],
+                "redaction": {"applied": True, "policies": ["ssn"], "entities_redacted": 1},
+                "redacted_entities": [
+                    {"token": "hash:v1:abc", "kind": "ssn", "text": "123-45-6789"}
+                ],
+            }
+        )
+    )
+    assert isinstance(event, Transcript)
+    assert event.redacted_entities is not None
+    assert event.redacted_entities[0].start is None
+    assert event.redacted_entities[0].end is None
+
+
+def test_parse_redacted_entities_absent_and_empty() -> None:
+    absent = parse_event(
+        '{"type":"Transcript","channel":0,"text":"hello","words":[],'
+        '"redaction":{"applied":false,"policies":[],"entities_redacted":0}}'
+    )
+    empty = parse_event(
+        '{"type":"Transcript","channel":0,"text":"hello","words":[],'
+        '"redaction":{"applied":false,"policies":[],"entities_redacted":0},'
+        '"redacted_entities":[]}'
+    )
+    assert isinstance(absent, Transcript)
+    assert isinstance(empty, Transcript)
+    assert absent.redacted_entities is None
+    assert empty.redacted_entities == ()
+
+
 def test_parse_error_event() -> None:
     event = parse_event('{"type":"Error","code":"invalid_frame","message":"bad duration"}')
     assert isinstance(event, ErrorEvent)
@@ -138,6 +206,15 @@ def test_parse_transcription() -> None:
         "segments": [{"start": 0.0, "end": 0.4, "text": "hello"}],
         "audio_duration_seconds": 0.5,
         "pii_entities": [{"kind": "ssn"}],
+        "redacted_entities": [
+            {
+                "token": "hash:v1:9f2c41d08ab37e15",
+                "kind": "credit_card",
+                "text": "4111 1111 1111 1111",
+                "start": 0.1,
+                "end": 0.4,
+            }
+        ],
         "model_info": {"name": "bw-streaming-en", "version": "current"},
     }
     result = parse_transcription(json.dumps(payload))
@@ -148,6 +225,15 @@ def test_parse_transcription() -> None:
     assert result.segments[0].end == 0.4
     assert result.audio_duration_seconds == 0.5
     assert result.model_info == {"name": "bw-streaming-en", "version": "current"}
+    assert result.redacted_entities == (
+        RedactedEntity(
+            token="hash:v1:9f2c41d08ab37e15",
+            kind="credit_card",
+            text="4111 1111 1111 1111",
+            start=0.1,
+            end=0.4,
+        ),
+    )
     assert result.raw["pii_entities"] == [{"kind": "ssn"}]
 
 
@@ -166,6 +252,20 @@ def test_parse_transcription_allows_empty_words() -> None:
     )
     assert result.words == ()
     assert result.segments[0].text == "hello"
+
+
+def test_parse_transcription_redacted_entities_absent_and_empty() -> None:
+    base = {
+        "request_id": "req-t",
+        "text": "hello",
+        "words": [],
+        "segments": [],
+        "audio_duration_seconds": 0.5,
+    }
+    absent = parse_transcription(json.dumps(base))
+    empty = parse_transcription(json.dumps({**base, "redacted_entities": []}))
+    assert absent.redacted_entities is None
+    assert empty.redacted_entities == ()
 
 
 def test_parse_transcription_malformed() -> None:

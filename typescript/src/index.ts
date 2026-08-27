@@ -4,6 +4,7 @@ export { SttSession } from "./session";
 export type { SessionEventMap } from "./session";
 export type {
   ErrorEvent,
+  RedactedEntity,
   RedactionSummary,
   Segment,
   SessionClosed,

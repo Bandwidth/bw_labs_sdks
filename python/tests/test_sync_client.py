@@ -61,6 +61,19 @@ def test_connect_sends_header_auth_and_params(mock_server: ServerFactory, api_ke
     assert query["keywords"] == "dry van"
 
 
+def test_connect_sends_redacted_entity_return_option(
+    mock_server: ServerFactory, api_key_env: str
+) -> None:
+    server = mock_server()
+    client = BwSttClient(base_url=server.url)
+    with client.connect(mode="demand", redact_pii=True, redact_pii_return=True) as session:
+        assert session.opened.request_id == "req-1"
+    query = dict(parse_qsl(urlsplit(server.recorder.path or "").query))
+    assert query["redact_pii"] == "true"
+    assert query["redact_pii_return"] == "true"
+    assert "redact_pii_sub" not in query
+
+
 def test_api_key_env_fallback(mock_server: ServerFactory, api_key_env: str) -> None:
     server = mock_server()
     client = BwSttClient(base_url=server.url)

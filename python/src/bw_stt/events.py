@@ -11,6 +11,7 @@ from .errors import ProtocolError
 __all__ = [
     "ErrorEvent",
     "Event",
+    "RedactedEntity",
     "RedactionSummary",
     "Segment",
     "SessionClosed",
@@ -61,6 +62,17 @@ class RedactionSummary:
 
 
 @dataclass(frozen=True)
+class RedactedEntity:
+    """One PII span returned when redaction entity return is enabled."""
+
+    token: str
+    kind: str
+    text: str
+    start: float | None
+    end: float | None
+
+
+@dataclass(frozen=True)
 class Transcript:
     """A complete demand-mode transcript for one channel."""
 
@@ -69,6 +81,7 @@ class Transcript:
     words: tuple[Word, ...]
     redaction: RedactionSummary
     raw: dict[str, Any] = field(repr=False)
+    redacted_entities: tuple[RedactedEntity, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,7 @@ class Transcription:
     audio_duration_seconds: float
     model_info: dict[str, Any]
     raw: dict[str, Any] = field(repr=False)
+    redacted_entities: tuple[RedactedEntity, ...] | None = None
 
 
 Event: TypeAlias = SessionOpened | Segment | Transcript | ErrorEvent | SessionClosed | UnknownEvent
@@ -155,6 +169,15 @@ def _number(obj: dict[str, Any], key: str) -> float:
     value = obj.get(key)
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ProtocolError(f"expected number {key!r} in server message")
+    return float(value)
+
+
+def _optional_number(obj: dict[str, Any], key: str) -> float | None:
+    value = obj.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        raise ProtocolError(f"expected number or null {key!r} in server message")
     return float(value)
 
 
@@ -195,6 +218,28 @@ def _redaction(obj: dict[str, Any]) -> RedactionSummary:
         policies=tuple(raw_policies),
         entities_redacted=entities_redacted,
     )
+
+
+def _redacted_entities(obj: dict[str, Any]) -> tuple[RedactedEntity, ...] | None:
+    if "redacted_entities" not in obj:
+        return None
+    raw_entities = obj["redacted_entities"]
+    if not isinstance(raw_entities, list):
+        raise ProtocolError("expected array 'redacted_entities' in server message")
+    entities = []
+    for item in raw_entities:
+        if not isinstance(item, dict):
+            raise ProtocolError("expected object entries in 'redacted_entities'")
+        entities.append(
+            RedactedEntity(
+                token=_string(item, "token"),
+                kind=_string(item, "kind"),
+                text=_string(item, "text"),
+                start=_optional_number(item, "start"),
+                end=_optional_number(item, "end"),
+            )
+        )
+    return tuple(entities)
 
 
 def _transcription_segments(obj: dict[str, Any]) -> tuple[TranscriptionSegment, ...]:
@@ -259,6 +304,7 @@ def parse_event(payload: str | bytes) -> Event:
             words=_words(value),
             redaction=_redaction(value),
             raw=value,
+            redacted_entities=_redacted_entities(value),
         )
     if event_type == "Error":
         return ErrorEvent(code=_string(value, "code"), message=_string(value, "message"), raw=value)
@@ -292,4 +338,5 @@ def parse_transcription(payload: str | bytes) -> Transcription:
         audio_duration_seconds=_number(value, "audio_duration_seconds"),
         model_info=model_info,
         raw=value,
+        redacted_entities=_redacted_entities(value),
     )

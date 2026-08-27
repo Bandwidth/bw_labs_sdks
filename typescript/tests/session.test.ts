@@ -128,6 +128,7 @@ describe("connect", () => {
       redactPii: true,
       redactPiiPolicies: ["ssn"],
       redactPiiSub: "hash",
+      redactPiiReturn: true,
       keywords: ["dry van", "reefer"],
     });
     const connection = await server.waitForConnection();
@@ -135,6 +136,7 @@ describe("connect", () => {
     expect(connection.query.get("redact_pii")).toBe("true");
     expect(connection.query.get("redact_pii_policies")).toBe("ssn");
     expect(connection.query.get("redact_pii_sub")).toBe("hash");
+    expect(connection.query.get("redact_pii_return")).toBe("true");
     expect(connection.query.getAll("keywords")).toEqual(["dry van", "reefer"]);
     session.disconnect();
   });

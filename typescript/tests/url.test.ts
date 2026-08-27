@@ -64,6 +64,31 @@ describe("buildListenUrl", () => {
     expect(url.searchParams.get("redact_pii")).toBeNull();
     expect(url.searchParams.get("redact_pii_policies")).toBeNull();
     expect(url.searchParams.get("redact_pii_sub")).toBeNull();
+    expect(url.searchParams.get("redact_pii_return")).toBeNull();
+  });
+
+  it("maps redacted entity return and omits the default hash substitution", () => {
+    const url = new URL(
+      buildListenUrl("wss://api.labs.bandwidth.com", {
+        mode: "demand",
+        redactPii: true,
+        redactPiiReturn: true,
+      }),
+    );
+    expect(url.searchParams.get("redact_pii")).toBe("true");
+    expect(url.searchParams.get("redact_pii_return")).toBe("true");
+    expect(url.searchParams.get("redact_pii_sub")).toBeNull();
+  });
+
+  it("rejects invalid redacted entity return combinations", () => {
+    expect(() => buildListenUrl("wss://api.labs.bandwidth.com", { redactPiiReturn: true })).toThrow(TypeError);
+    expect(() =>
+      buildListenUrl("wss://api.labs.bandwidth.com", {
+        redactPii: true,
+        redactPiiReturn: true,
+        redactPiiSub: "entity_name",
+      }),
+    ).toThrow(TypeError);
   });
 
   it("repeats the keywords parameter once per keyword, encoded", () => {
@@ -149,7 +174,31 @@ describe("buildTranscribeUrl", () => {
     expect(url.searchParams.get("model")).toBe("pinned");
     expect(url.searchParams.get("redact_pii")).toBe("true");
     expect(url.searchParams.get("redact_pii_sub")).toBe("hash");
+    expect(url.searchParams.get("redact_pii_return")).toBeNull();
     expect(url.searchParams.getAll("keywords")).toEqual(["alpha", "beta"]);
+  });
+
+  it("maps redacted entity return on transcribe and omits an unset substitution", () => {
+    const url = new URL(
+      buildTranscribeUrl("wss://api.labs.bandwidth.com", {
+        redactPii: true,
+        redactPiiReturn: true,
+      }),
+    );
+    expect(url.searchParams.get("redact_pii")).toBe("true");
+    expect(url.searchParams.get("redact_pii_return")).toBe("true");
+    expect(url.searchParams.get("redact_pii_sub")).toBeNull();
+  });
+
+  it("rejects invalid redacted entity return combinations on transcribe", () => {
+    expect(() => buildTranscribeUrl("wss://api.labs.bandwidth.com", { redactPiiReturn: true })).toThrow(TypeError);
+    expect(() =>
+      buildTranscribeUrl("wss://api.labs.bandwidth.com", {
+        redactPii: true,
+        redactPiiReturn: true,
+        redactPiiSub: "entity_name",
+      }),
+    ).toThrow(TypeError);
   });
 
   it("omits raw-only format parameters for WAV uploads", () => {
