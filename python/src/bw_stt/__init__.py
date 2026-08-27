@@ -13,6 +13,7 @@ from .errors import (
 from .events import (
     ErrorEvent,
     Event,
+    RedactedEntity,
     RedactionSummary,
     Segment,
     SessionClosed,
@@ -41,6 +42,7 @@ __all__ = [
     "InvalidRequestError",
     "ProtocolError",
     "RateLimitError",
+    "RedactedEntity",
     "RedactionSummary",
     "Segment",
     "ServiceUnavailableError",

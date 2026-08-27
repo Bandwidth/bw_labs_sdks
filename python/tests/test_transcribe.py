@@ -107,6 +107,18 @@ def test_transcribe_bytes_params_and_response(
     assert "multichannel" not in as_dict
 
 
+def test_transcribe_redacted_entity_return_params(
+    mock_http_server: HttpServerFactory, api_key_env: str
+) -> None:
+    server = mock_http_server()
+    client = BwSttClient(base_url=server.base_url)
+    client.transcribe(b"\0" * 32000, redact_pii=True, redact_pii_return=True)
+    query = dict(parse_qsl(urlsplit(server.recorder.path or "").query))
+    assert query["redact_pii"] == "true"
+    assert query["redact_pii_return"] == "true"
+    assert "redact_pii_sub" not in query
+
+
 def test_transcribe_wav_path_uses_header_rate(
     mock_http_server: HttpServerFactory, api_key_env: str, tmp_path: Path
 ) -> None:

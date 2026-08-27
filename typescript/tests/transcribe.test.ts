@@ -154,7 +154,59 @@ describe("transcribe", () => {
     expect(result.segments).toEqual([{ start: 0.0, end: 0.5, text: "i need a dry van" }]);
     expect(result.audioDurationSeconds).toBe(0.5);
     expect(result.modelInfo).toEqual({ name: "bw-streaming-en", version: "current" });
+    expect(result.redactedEntities).toBeUndefined();
     expect(result.raw.pii_entities).toEqual([{ type: "ssn", start: 0.1, end: 0.2 }]);
+  });
+
+  it("sends redacted entity return and parses returned entities", async () => {
+    server.response.body = JSON.stringify({
+      request_id: "req-t1",
+      text: "card hash:v1:9f2c41d08ab37e15",
+      words: [],
+      segments: [],
+      audio_duration_seconds: 0.5,
+      redacted_entities: [
+        {
+          token: "hash:v1:9f2c41d08ab37e15",
+          kind: "credit_card",
+          text: "4111 1111 1111 1111",
+          start: 0.5,
+          end: 1.2,
+        },
+        { token: "hash:v1:abc", kind: "ssn", text: "123-45-6789", start: null, end: null },
+      ],
+    });
+    const result = await client().transcribe(pcmBytes(3200), {
+      redactPii: true,
+      redactPiiReturn: true,
+    });
+    const params = server.requests[0]!.url.searchParams;
+    expect(params.get("redact_pii")).toBe("true");
+    expect(params.get("redact_pii_return")).toBe("true");
+    expect(params.get("redact_pii_sub")).toBeNull();
+    expect(result.redactedEntities).toEqual([
+      {
+        token: "hash:v1:9f2c41d08ab37e15",
+        kind: "credit_card",
+        text: "4111 1111 1111 1111",
+        start: 0.5,
+        end: 1.2,
+      },
+      { token: "hash:v1:abc", kind: "ssn", text: "123-45-6789", start: null, end: null },
+    ]);
+  });
+
+  it("preserves an empty redacted entity array in a transcribe result", async () => {
+    server.response.body = JSON.stringify({
+      request_id: "req-t1",
+      text: "hello",
+      words: [],
+      segments: [],
+      audio_duration_seconds: 0.5,
+      redacted_entities: [],
+    });
+    const result = await client().transcribe(pcmBytes(3200));
+    expect(result.redactedEntities).toEqual([]);
   });
 
   it("rejects invalid keyword lists before sending", async () => {

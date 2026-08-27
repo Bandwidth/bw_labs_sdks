@@ -140,6 +140,7 @@ class AsyncBwSttClient:
         redact_pii: bool = False,
         redact_pii_policies: Sequence[str] | None = None,
         redact_pii_sub: str | None = None,
+        redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         keepalive_interval: float | None = 25.0,
         connect_timeout: float = 15.0,
@@ -170,6 +171,7 @@ class AsyncBwSttClient:
             redact_pii=redact_pii,
             redact_pii_policies=redact_pii_policies,
             redact_pii_sub=redact_pii_sub,
+            redact_pii_return=redact_pii_return,
             keywords=keywords,
         )
         try:
@@ -203,6 +205,7 @@ class AsyncBwSttClient:
         redact_pii: bool = False,
         redact_pii_policies: Sequence[str] | None = None,
         redact_pii_sub: str | None = None,
+        redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         raw: bool = False,
         timeout: float = 120.0,
@@ -227,6 +230,7 @@ class AsyncBwSttClient:
             redact_pii=redact_pii,
             redact_pii_policies=redact_pii_policies,
             redact_pii_sub=redact_pii_sub,
+            redact_pii_return=redact_pii_return,
             keywords=keywords,
             raw=raw,
             timeout=timeout,

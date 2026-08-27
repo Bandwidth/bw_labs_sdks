@@ -32,6 +32,8 @@ export interface FeatureOptions {
   redactPiiPolicies?: string[];
   /** Replacement style for redacted spans. */
   redactPiiSub?: PiiSubstitution;
+  /** Return the redacted entity spans alongside the redacted text. */
+  redactPiiReturn?: boolean;
   /** Words or phrases to boost, up to 100. */
   keywords?: string[];
 }

@@ -159,16 +159,29 @@ BW_STT_API_KEY=bwa_key_... node --import tsx examples/transcribe-wav.mts call.wa
 
 Ask the service to redact personally identifiable information in results:
 
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `redactPii` | `boolean` | `false` | Redact personally identifiable information. |
+| `redactPiiPolicies` | `string[]` | unset | Narrow redaction to these policy names. |
+| `redactPiiSub` | `"entity_name" \| "hash"` | unset | Choose the replacement style. |
+| `redactPiiReturn` | `boolean` | `false` | Return redacted entity spans. Requires `redactPii: true` and hash substitution. |
+
 ```ts
 const session = await client.connect({
   mode: "demand",
   redactPii: true,
   redactPiiPolicies: ["ssn", "credit_card"], // optional policy selection
-  redactPiiSub: "entity_name",               // or "hash"
+  redactPiiReturn: true,                      // omit redactPiiSub for the server's hash default
 });
 const transcripts = await session.finalizeTranscript();
 for (const transcript of transcripts) {
-  console.log(transcript.text, transcript.redaction);
+  const entitiesByToken = new Map(
+    (transcript.redactedEntities ?? []).map((entity) => [entity.token, entity]),
+  );
+  for (const token of transcript.text.split(/\s+/)) {
+    const entity = entitiesByToken.get(token);
+    if (entity !== undefined) console.log(token, "maps to", entity.text, entity.kind);
+  }
 }
 ```
 
@@ -184,11 +197,26 @@ A demand `Transcript` includes a redaction summary:
     "applied": true,
     "policies": ["ssn"],
     "entities_redacted": 1
-  }
+  },
+  "redacted_entities": [
+    {
+      "token": "hash:v1:9f2c41d08ab37e15",
+      "kind": "ssn",
+      "text": "123-45-6789",
+      "start": 2.10,
+      "end": 2.45
+    }
+  ]
 }
 ```
 
-The policy names above are illustrative; consult the API reference for the published list. The same options work on `transcribe` and `transcribeFile`.
+`redactedEntities` is `undefined` when the server omits the field and an empty
+array when the server sends an empty array. Each `token` is the exact hash
+token in the redacted text, so it can be joined to the corresponding entity.
+`start` and `end` are `null` when the server has no timestamps. The same
+options work on `transcribe` and `transcribeFile`. When `redactPiiReturn: true`,
+`redactPiiSub: "entity_name"` is invalid. The policy names above are
+illustrative; consult the API reference for the published list.
 
 ## Keyword boosting
 

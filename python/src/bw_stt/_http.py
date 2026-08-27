@@ -42,6 +42,7 @@ def transcribe(
     redact_pii: bool,
     redact_pii_policies: Sequence[str] | None,
     redact_pii_sub: str | None,
+    redact_pii_return: bool,
     keywords: Sequence[str] | None,
     raw: bool,
     timeout: float,
@@ -81,6 +82,7 @@ def transcribe(
         redact_pii=redact_pii,
         redact_pii_policies=redact_pii_policies,
         redact_pii_sub=redact_pii_sub,
+        redact_pii_return=redact_pii_return,
         keywords=keywords,
     )
     content_type = TRANSCRIBE_RAW_CONTENT_TYPE if raw_input else TRANSCRIBE_WAV_CONTENT_TYPE

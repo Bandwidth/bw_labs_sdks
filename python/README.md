@@ -158,16 +158,27 @@ piece to its last. See `examples/transcribe_wav.py` for a complete CLI.
 
 Ask the service to redact personally identifiable information in results:
 
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `redact_pii` | `bool` | `False` | Redact personally identifiable information. |
+| `redact_pii_policies` | sequence of `str` | unset | Narrow redaction to these policy names. |
+| `redact_pii_sub` | `str` | unset | Use `entity_name` or `hash` for replacements. |
+| `redact_pii_return` | `bool` | `False` | Return redacted entity spans. Requires `redact_pii=True` and hash substitution. |
+
 ```python
 session = client.connect(
     mode="demand",
     redact_pii=True,
     redact_pii_policies=["ssn", "credit_card"],  # optional narrowing
-    redact_pii_sub="entity_name",  # "entity_name" or "hash"
+    redact_pii_return=True,  # omit redact_pii_sub to use the server's hash default
 )
 transcripts = session.finalize_transcript()
 for transcript in transcripts:
-    print(transcript.text, transcript.redaction)
+    entities_by_token = {entity.token: entity for entity in transcript.redacted_entities or ()}
+    for token in transcript.text.split():
+        entity = entities_by_token.get(token)
+        if entity is not None:
+            print(token, "maps to", entity.text, entity.kind, entity.start, entity.end)
 ```
 
 The demand transcript includes a summary such as:
@@ -182,11 +193,25 @@ The demand transcript includes a summary such as:
     "applied": true,
     "policies": ["ssn"],
     "entities_redacted": 1
-  }
+  },
+  "redacted_entities": [
+    {
+      "token": "hash:v1:9f2c41d08ab37e15",
+      "kind": "ssn",
+      "text": "123-45-6789",
+      "start": 2.10,
+      "end": 2.45
+    }
+  ]
 }
 ```
 
-The same options apply to `transcribe()`. The policy names shown here are
+`redacted_entities` is `None` when the server omits the field and an empty
+tuple when the server sends an empty array. Each returned `token` is the exact
+hash token in the redacted text, so it can be joined to the corresponding
+entity. `start` and `end` are `None` when the server has no timestamps. The
+same options apply to `transcribe()`. When `redact_pii_return=True`,
+`redact_pii_sub="entity_name"` is invalid. The policy names shown here are
 illustrative; the supported list ships with the published API reference.
 
 ## Keyword boosting

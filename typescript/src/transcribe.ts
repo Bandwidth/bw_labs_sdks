@@ -6,7 +6,8 @@ import {
   RateLimitError,
   ServiceUnavailableError,
 } from "./errors";
-import type { Word } from "./events";
+import { parseRedactedEntities } from "./events";
+import type { RedactedEntity, Word } from "./events";
 import {
   API_KEY_HEADER,
   TRANSCRIBE_MAX_AUDIO_DESCRIPTION,
@@ -33,6 +34,7 @@ export interface Transcription {
   readonly segments: readonly TranscriptionSegment[];
   readonly audioDurationSeconds: number;
   readonly modelInfo: Record<string, unknown>;
+  readonly redactedEntities?: readonly RedactedEntity[];
   readonly raw: Record<string, unknown>;
 }
 
@@ -170,6 +172,7 @@ function parseTranscription(payload: unknown): Transcription {
     }
     return { start: segment.start, end: segment.end, text: segment.text };
   });
+  const redactedEntities = parseRedactedEntities(raw.redacted_entities, "transcribe response.redacted_entities");
   return {
     requestId: raw.request_id,
     text: raw.text,
@@ -177,6 +180,7 @@ function parseTranscription(payload: unknown): Transcription {
     segments,
     audioDurationSeconds: raw.audio_duration_seconds,
     modelInfo: modelInfo === undefined ? {} : (modelInfo as Record<string, unknown>),
+    ...(redactedEntities === undefined ? {} : { redactedEntities }),
     raw,
   };
 }

@@ -46,6 +46,15 @@ export interface RedactionSummary {
   readonly entitiesRedacted: number;
 }
 
+/** One PII span returned when redaction entity return is enabled. */
+export interface RedactedEntity {
+  readonly token: string;
+  readonly kind: string;
+  readonly text: string;
+  readonly start: number | null;
+  readonly end: number | null;
+}
+
 /** A complete demand-mode transcript for one channel. */
 export interface Transcript {
   readonly type: "Transcript";
@@ -53,6 +62,7 @@ export interface Transcript {
   readonly text: string;
   readonly words: readonly Word[];
   readonly redaction: RedactionSummary;
+  readonly redactedEntities?: readonly RedactedEntity[];
   /** The event exactly as received from the server. */
   readonly raw: Record<string, unknown>;
 }
@@ -150,6 +160,24 @@ function parseRedaction(raw: Record<string, unknown>): RedactionSummary {
   };
 }
 
+export function parseRedactedEntities(
+  value: unknown,
+  context: string,
+): readonly RedactedEntity[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new ProtocolError(`${context} is not an array`);
+  return value.map((entry, index) => {
+    const entity = asObject(entry, `${context}[${index}]`);
+    return {
+      token: asString(entity.token, `${context}[${index}].token`),
+      kind: asString(entity.kind, `${context}[${index}].kind`),
+      text: asString(entity.text, `${context}[${index}].text`),
+      start: entity.start === undefined || entity.start === null ? null : asNumber(entity.start, `${context}[${index}].start`),
+      end: entity.end === undefined || entity.end === null ? null : asNumber(entity.end, `${context}[${index}].end`),
+    };
+  });
+}
+
 /** Parse one server text message into a typed event. Throws ProtocolError. */
 export function parseEvent(text: string): SttEvent {
   let value: unknown;
@@ -199,6 +227,7 @@ export function parseEvent(text: string): SttEvent {
     case "Transcript": {
       const words = raw.words;
       if (!Array.isArray(words)) throw new ProtocolError("Transcript.words is not an array");
+      const redactedEntities = parseRedactedEntities(raw.redacted_entities, "Transcript.redacted_entities");
       return {
         type,
         channel: asInteger(raw.channel, "channel"),
@@ -212,6 +241,7 @@ export function parseEvent(text: string): SttEvent {
           };
         }),
         redaction: parseRedaction(raw),
+        ...(redactedEntities === undefined ? {} : { redactedEntities }),
         raw,
       };
     }

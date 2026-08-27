@@ -16,6 +16,7 @@ API_KEY_HEADER = "X-BW-LABS-API-KEY"
 PARAM_REDACT_PII = "redact_pii"
 PARAM_REDACT_PII_POLICIES = "redact_pii_policies"
 PARAM_REDACT_PII_SUB = "redact_pii_sub"
+PARAM_REDACT_PII_RETURN = "redact_pii_return"
 PARAM_KEYWORDS = "keywords"
 LISTEN_PATH = "/audio/v1/listen"
 TRANSCRIBE_PATH = "/audio/v1/transcribe"
@@ -53,6 +54,7 @@ class SessionParams:
     redact_pii: bool = False
     redact_pii_policies: Sequence[str] | None = None
     redact_pii_sub: str | None = None
+    redact_pii_return: bool = False
     keywords: Sequence[str] | None = None
 
     def __post_init__(self) -> None:
@@ -75,6 +77,12 @@ class SessionParams:
             raise ValueError("mode must be instant or demand")
         if self.redact_pii_sub is not None and not self.redact_pii_sub:
             raise ValueError("redact_pii_sub must be a non-empty string")
+        if self.redact_pii_return and not self.redact_pii:
+            raise ValueError("redact_pii_return requires redact_pii=True")
+        if self.redact_pii_return and self.redact_pii_sub == "entity_name":
+            raise ValueError(
+                "redact_pii_return cannot be combined with redact_pii_sub='entity_name'"
+            )
         if self.keywords is not None:
             if len(self.keywords) > MAX_KEYWORDS:
                 raise ValueError(f"at most {MAX_KEYWORDS} keywords are allowed")
@@ -114,6 +122,8 @@ class SessionParams:
             pairs.append((PARAM_REDACT_PII_POLICIES, ",".join(self.redact_pii_policies)))
         if self.redact_pii_sub is not None:
             pairs.append((PARAM_REDACT_PII_SUB, self.redact_pii_sub))
+        if self.redact_pii_return:
+            pairs.append((PARAM_REDACT_PII_RETURN, "true"))
         if self.keywords:
             pairs.extend((PARAM_KEYWORDS, keyword) for keyword in self.keywords)
         return pairs
