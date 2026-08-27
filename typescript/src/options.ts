@@ -28,8 +28,6 @@ export interface MediaOptions {
 export interface FeatureOptions {
   /** Redact personally identifiable information in results. */
   redactPii?: boolean;
-  /** Redaction policy names; sent comma-joined. */
-  redactPiiPolicies?: string[];
   /** Replacement style for redacted spans. */
   redactPiiSub?: PiiSubstitution;
   /** Return the redacted entity spans alongside the redacted text. */

@@ -72,7 +72,6 @@ def test_transcribe_bytes_params_and_response(
         b"\0" * 32000,
         model="tag-1",
         redact_pii=True,
-        redact_pii_policies=["ssn", "phone"],
         redact_pii_sub="entity_name",
         keywords=["dry van", "reefer"],
     )
@@ -100,7 +99,6 @@ def test_transcribe_bytes_params_and_response(
     assert as_dict["channels"] == "1"
     assert as_dict["model"] == "tag-1"
     assert as_dict["redact_pii"] == "true"
-    assert as_dict["redact_pii_policies"] == "ssn,phone"
     assert as_dict["redact_pii_sub"] == "entity_name"
     assert [value for name, value in query if name == "keywords"] == ["dry van", "reefer"]
     assert "mode" not in as_dict

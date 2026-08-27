@@ -48,13 +48,11 @@ def test_mode_demand_in_url() -> None:
 def test_pii_params() -> None:
     params = SessionParams(
         redact_pii=True,
-        redact_pii_policies=["ssn", "credit_card"],
         redact_pii_sub="hash",
         redact_pii_return=True,
     )
     query = dict(query_of(build_ws_url(BASE, params)))
     assert query["redact_pii"] == "true"
-    assert query["redact_pii_policies"] == "ssn,credit_card"
     assert query["redact_pii_sub"] == "hash"
     assert query["redact_pii_return"] == "true"
 
@@ -72,7 +70,6 @@ def test_pii_params_absent_by_default() -> None:
     query = dict(query_of(build_ws_url(BASE, SessionParams())))
     for name in (
         "redact_pii",
-        "redact_pii_policies",
         "redact_pii_sub",
         "redact_pii_return",
         "keywords",

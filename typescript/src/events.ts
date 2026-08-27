@@ -42,7 +42,6 @@ export interface Segment {
 /** Redaction summary attached to a demand-mode Transcript. */
 export interface RedactionSummary {
   readonly applied: boolean;
-  readonly policies: readonly string[];
   readonly entitiesRedacted: number;
 }
 
@@ -147,15 +146,8 @@ function parseRedaction(raw: Record<string, unknown>): RedactionSummary {
   if (typeof redaction.applied !== "boolean") {
     throw new ProtocolError("Transcript.redaction.applied is not a boolean");
   }
-  if (!Array.isArray(redaction.policies)) {
-    throw new ProtocolError("Transcript.redaction.policies is not an array");
-  }
-  const policies = redaction.policies.map((policy, index) =>
-    asString(policy, `Transcript.redaction.policies[${index}]`),
-  );
   return {
     applied: redaction.applied,
-    policies,
     entitiesRedacted: asInteger(redaction.entities_redacted, "Transcript.redaction.entities_redacted"),
   };
 }

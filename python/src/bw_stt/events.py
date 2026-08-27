@@ -57,7 +57,6 @@ class RedactionSummary:
     """PII redaction information attached to a demand-mode transcript."""
 
     applied: bool
-    policies: tuple[str, ...]
     entities_redacted: int
 
 
@@ -205,17 +204,11 @@ def _redaction(obj: dict[str, Any]) -> RedactionSummary:
     if not isinstance(value, dict):
         raise ProtocolError("Transcript has no 'redaction' object")
     applied = _boolean(value, "applied")
-    raw_policies = value.get("policies")
-    if not isinstance(raw_policies, list) or not all(
-        isinstance(policy, str) for policy in raw_policies
-    ):
-        raise ProtocolError("expected string array 'redaction.policies' in server message")
     entities_redacted = value.get("entities_redacted")
     if isinstance(entities_redacted, bool) or not isinstance(entities_redacted, int):
         raise ProtocolError("expected integer 'redaction.entities_redacted' in server message")
     return RedactionSummary(
         applied=applied,
-        policies=tuple(raw_policies),
         entities_redacted=entities_redacted,
     )
 
