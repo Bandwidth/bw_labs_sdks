@@ -6,8 +6,11 @@ recording for whole-file transcription.
 
 ## Install
 
+During the beta, install from a clone of this repository:
+
 ```bash
-pip install bw-stt
+git clone https://github.com/Bandwidth/bw_labs_sdks.git
+pip install ./bw_labs_sdks/python
 ```
 
 Requires Python 3.10 or later. Set your API key once:
