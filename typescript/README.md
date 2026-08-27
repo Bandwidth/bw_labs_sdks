@@ -32,10 +32,10 @@ In browsers, pass the key explicitly: `new BwSttClient({ apiKey })`. Browsers ca
 
 `baseUrl` accepts `ws`, `wss`, `http`, or `https`; `http(s)` is converted to `ws(s)` for streaming and back to `http(s)` for transcribe. A baseUrl without a path gets the standard endpoint paths appended (`/audio/v1/listen`, `/audio/v1/transcribe`). A custom path is used verbatim for streaming; for transcribe, a trailing `/listen` is replaced with `/transcribe`, and any other custom path gets `/transcribe` appended.
 
-## Listen modes and offline transcribe
+## Listen modes and Transcribe
 
 Instant and demand are modes of the `/audio/v1/listen` WebSocket endpoint.
-Offline transcription uses `POST /audio/v1/transcribe` over HTTP and is not a
+Transcribe uses `POST /audio/v1/transcribe` over HTTP and is not a
 WebSocket session mode.
 
 | Mode | Delivery | Best for |
@@ -77,9 +77,9 @@ For an instant versus demand comparison, use `Segment` callbacks for
 continuously arriving final pieces, or `Transcript` callbacks and
 `finalizeTranscript()` for application-controlled voice-agent turns.
 
-### Offline transcribe
+### Transcribe
 
-Offline transcription of a complete recording (up to five minutes) in one HTTP
+Whole-recording transcription (up to five minutes) in one HTTP
 call. No session to manage.
 
 ```ts
