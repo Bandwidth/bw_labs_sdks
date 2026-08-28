@@ -7,13 +7,14 @@ name = "bw-stt"
 version = "0.1.0"
 description = "Python SDK for the Bandwidth Labs speech-to-text API"
 readme = "README.md"
-license = {text = "UNLICENSED"}
+license = {text = "MIT"}
 authors = [{name = "Bandwidth"}]
 requires-python = ">=3.10"
 dependencies = ["websockets>=13"]
 keywords = ["speech-to-text", "stt", "transcription", "streaming", "bandwidth"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
