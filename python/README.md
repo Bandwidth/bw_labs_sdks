@@ -286,3 +286,7 @@ client = BwSttClient(base_url="wss://gateway.example.com")
 
 Full protocol documentation:
 [Bandwidth Labs speech-to-text API reference](https://labs.bandwidth.com/docs/speech-to-text).
+
+## License
+
+MIT. See [LICENSE](./LICENSE).

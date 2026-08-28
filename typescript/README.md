@@ -267,3 +267,7 @@ names are camelCase mappings of the wire names (`audio_duration_seconds`
 becomes `audioDurationSeconds`), and every event keeps the original payload on
 `.raw`. Event types this SDK does not know yet are surfaced as `UnknownEvent`
 rather than dropped.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
