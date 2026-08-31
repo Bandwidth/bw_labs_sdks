@@ -37,12 +37,10 @@ files:
 
 Configure trusted publishing for each registry before running the workflow:
 
-- On npm, add a GitHub Actions trusted publisher for `@bandwidth-labs/bw-stt` using
-  organization `Bandwidth`, repository `bw_labs_sdks`, workflow `publish.yml`,
-  and no environment. If the package has not been published yet, add an
-  `NPM_TOKEN` repository secret under **Settings → Secrets and variables →
-  Actions** for the initial publish; npm uses it as a fallback until trusted
-  publishing is configured.
+- On npm, add a GitHub Actions trusted publisher for
+  `@bandwidth-labs/bw-stt` using organization `Bandwidth`, repository
+  `bw_labs_sdks`, workflow `publish.yml`, and no environment. The workflow
+  authenticates through GitHub OIDC and does not require an npm token.
 - On PyPI, add a GitHub Actions trusted publisher for `bw-stt` using owner
   `Bandwidth`, repository `bw_labs_sdks`, workflow `publish.yml`, and
   environment `pypi`. A pending publisher can be configured before the first

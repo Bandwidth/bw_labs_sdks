@@ -65,8 +65,6 @@ jobs:
           PACKAGE_FILE="${PACKAGE_FILES[0]}"
           echo "filename=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
       - name: Publish package to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "${{ steps.package.outputs.filename }}" --access public --provenance
 
   publish-python:
