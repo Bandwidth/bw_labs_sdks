@@ -55,7 +55,7 @@ jobs:
       - name: Build package
         id: package
         run: |
-          PACKAGE_FILE="$(npm pack --silent)"
+          PACKAGE_FILE="$(npm pack)"
           test -f "$PACKAGE_FILE"
           echo "filename=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
       - name: Publish package to npm
