@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   validate-ref:
-    runs-on: ${{ fromJSON(vars.BW_RUNNER_GLORG_EKS_PROD_UBUNTU_2404_AMD64_XS) }}
+    runs-on: ubuntu-latest
     steps:
       - name: Require the default branch
         env:
@@ -35,7 +35,7 @@ jobs:
   publish-typescript:
     if: inputs.language == 'typescript'
     needs: validate-ref
-    runs-on: ${{ fromJSON(vars.BW_RUNNER_GLORG_EKS_PROD_UBUNTU_2404_AMD64_XS) }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -66,7 +66,7 @@ jobs:
   publish-python:
     if: inputs.language == 'python'
     needs: validate-ref
-    runs-on: ${{ fromJSON(vars.BW_RUNNER_GLORG_EKS_PROD_UBUNTU_2404_AMD64_XS) }}
+    runs-on: ubuntu-latest
     environment: pypi
     permissions:
       contents: read
