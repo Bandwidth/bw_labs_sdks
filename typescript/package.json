@@ -1,5 +1,5 @@
 {
-  "name": "@bandwidth/bw-stt",
+  "name": "@bandwidth-labs/bw-stt",
   "version": "0.1.0",
   "description": "TypeScript SDK for the Bandwidth Labs streaming speech-to-text API",
   "license": "MIT",

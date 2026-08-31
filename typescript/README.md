@@ -1,4 +1,4 @@
-# @bandwidth/bw-stt
+# @bandwidth-labs/bw-stt
 
 TypeScript SDK for the Bandwidth Labs streaming speech-to-text API. Works in Node 18+ and in browsers.
 
@@ -18,7 +18,7 @@ npm install ./bw_labs_sdks/typescript
 ## Quickstart
 
 ```ts
-import { BwSttClient } from "@bandwidth/bw-stt";
+import { BwSttClient } from "@bandwidth-labs/bw-stt";
 
 const client = new BwSttClient(); // reads BW_STT_API_KEY from the environment
 const session = await client.connect({ encoding: "linear16", sampleRate: 16000 });
@@ -143,7 +143,7 @@ During quiet periods the session sends `KeepAlive` automatically every 25 second
 Segments carry raw decoded text deltas, often subword pieces. Two helpers turn them into display text. `TranscriptAssembler` builds the full transcript by plain concatenation. `WordAssembler` maintains a live word list: a piece starting with a space begins a new word, and a piece without one grows the previous word in place, so "dr" appears instantly and becomes "dry" when the next piece arrives.
 
 ```ts
-import { TranscriptAssembler, WordAssembler } from "@bandwidth/bw-stt";
+import { TranscriptAssembler, WordAssembler } from "@bandwidth-labs/bw-stt";
 
 const transcript = new TranscriptAssembler();
 const words = new WordAssembler();
@@ -241,7 +241,7 @@ carries that event. A failed final delivery is reported by
 `SessionClosed.deliveryFailed`.
 
 ```ts
-import { RateLimitError } from "@bandwidth/bw-stt";
+import { RateLimitError } from "@bandwidth-labs/bw-stt";
 
 try {
   const session = await client.connect();

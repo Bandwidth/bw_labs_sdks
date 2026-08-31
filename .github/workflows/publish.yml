@@ -19,23 +19,23 @@ permissions:
   contents: read
 
 jobs:
-  validate-ref:
-    runs-on: ${{ fromJSON(vars.BW_RUNNER_GLORG_EKS_PROD_UBUNTU_2404_AMD64_XS) }}
-    steps:
-      - name: Require the default branch
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-            echo "::error::Packages can only be published from $DEFAULT_BRANCH."
-            exit 1
-          fi
+  #validate-ref:
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - name: Require the default branch
+  #      env:
+  #        REF_NAME: ${{ github.ref_name }}
+  #        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  #      run: |
+  #        if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+  #          echo "::error::Packages can only be published from $DEFAULT_BRANCH."
+  #          exit 1
+  #        fi
 
   publish-typescript:
     if: inputs.language == 'typescript'
-    needs: validate-ref
-    runs-on: ${{ fromJSON(vars.BW_RUNNER_GLORG_EKS_PROD_UBUNTU_2404_AMD64_XS) }}
+    #needs: validate-ref
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
@@ -55,18 +55,22 @@ jobs:
       - name: Build package
         id: package
         run: |
-          PACKAGE_FILE="$(npm pack --silent)"
-          test -f "$PACKAGE_FILE"
+          npm pack
+          shopt -s nullglob
+          PACKAGE_FILES=(*.tgz)
+          if [ "${#PACKAGE_FILES[@]}" -ne 1 ]; then
+            echo "::error::Expected npm pack to create exactly one tarball."
+            exit 1
+          fi
+          PACKAGE_FILE="${PACKAGE_FILES[0]}"
           echo "filename=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
       - name: Publish package to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "${{ steps.package.outputs.filename }}" --access public --provenance
 
   publish-python:
     if: inputs.language == 'python'
-    needs: validate-ref
-    runs-on: ${{ fromJSON(vars.BW_RUNNER_GLORG_EKS_PROD_UBUNTU_2404_AMD64_XS) }}
+    #needs: validate-ref
+    runs-on: ubuntu-latest
     environment: pypi
     permissions:
       contents: read
