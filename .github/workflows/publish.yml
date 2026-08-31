@@ -55,8 +55,14 @@ jobs:
       - name: Build package
         id: package
         run: |
-          PACKAGE_FILE="$(npm pack)"
-          test -f "$PACKAGE_FILE"
+          npm pack
+          shopt -s nullglob
+          PACKAGE_FILES=(*.tgz)
+          if [ "${#PACKAGE_FILES[@]}" -ne 1 ]; then
+            echo "::error::Expected npm pack to create exactly one tarball."
+            exit 1
+          fi
+          PACKAGE_FILE="${PACKAGE_FILES[0]}"
           echo "filename=$PACKAGE_FILE" >> "$GITHUB_OUTPUT"
       - name: Publish package to npm
         env:

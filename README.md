@@ -5,7 +5,7 @@ Official client SDKs for Bandwidth Labs services.
 | SDK | Package | Directory |
 |---|---|---|
 | Python | `bw-stt` | [`python/`](python/) |
-| TypeScript / Node | `@bandwidth/bw-stt` | [`typescript/`](typescript/) |
+| TypeScript / Node | `@bandwidth-labs/bw-stt` | [`typescript/`](typescript/) |
 
 Both SDKs cover the Speech to Text API: streaming transcription over the
 `/audio/v1/listen` WebSocket in instant and demand modes, whole-file
@@ -37,7 +37,7 @@ files:
 
 Configure trusted publishing for each registry before running the workflow:
 
-- On npm, add a GitHub Actions trusted publisher for `@bandwidth/bw-stt` using
+- On npm, add a GitHub Actions trusted publisher for `@bandwidth-labs/bw-stt` using
   organization `Bandwidth`, repository `bw_labs_sdks`, workflow `publish.yml`,
   and no environment. If the package has not been published yet, add an
   `NPM_TOKEN` repository secret under **Settings → Secrets and variables →
