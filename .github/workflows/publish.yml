@@ -36,6 +36,7 @@ jobs:
     if: inputs.language == 'typescript'
     needs: validate-ref
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: read
       id-token: write
