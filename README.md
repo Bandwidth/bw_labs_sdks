@@ -17,3 +17,33 @@ directory.
 Create an API key from your dashboard at
 [labs.bandwidth.com](https://labs.bandwidth.com), set it as
 `BW_STT_API_KEY`, and follow the quickstart in the SDK's README.
+
+## Publishing a package
+
+The **Publish package** GitHub Actions workflow can be run manually for either
+`typescript` or `python`. It reads the version already configured in the
+selected package, builds it without modifying the source, and publishes it to
+npm or PyPI. Run it from the repository's default branch after the version
+change has been merged. If that version has already been published, the
+registry rejects it and the publish job fails.
+
+Before merging a release, update the package version in the corresponding
+files:
+
+- **TypeScript:** Update `version` in `typescript/package.json` and keep
+  `typescript/package-lock.json` synchronized.
+- **Python:** Update `version` in `python/pyproject.toml` and `__version__` in
+  `python/src/bw_stt/__init__.py` to the same new package version.
+
+Configure trusted publishing for each registry before running the workflow:
+
+- On npm, add a GitHub Actions trusted publisher for `@bandwidth/bw-stt` using
+  organization `Bandwidth`, repository `bw_labs_sdks`, workflow `publish.yml`,
+  and no environment. If the package has not been published yet, add an
+  `NPM_TOKEN` repository secret under **Settings → Secrets and variables →
+  Actions** for the initial publish; npm uses it as a fallback until trusted
+  publishing is configured.
+- On PyPI, add a GitHub Actions trusted publisher for `bw-stt` using owner
+  `Bandwidth`, repository `bw_labs_sdks`, workflow `publish.yml`, and
+  environment `pypi`. A pending publisher can be configured before the first
+  release.
