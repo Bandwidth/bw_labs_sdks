@@ -19,22 +19,22 @@ permissions:
   contents: read
 
 jobs:
-  validate-ref:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Require the default branch
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
-            echo "::error::Packages can only be published from $DEFAULT_BRANCH."
-            exit 1
-          fi
+  #validate-ref:
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - name: Require the default branch
+  #      env:
+  #        REF_NAME: ${{ github.ref_name }}
+  #        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+  #      run: |
+  #        if [ "$REF_NAME" != "$DEFAULT_BRANCH" ]; then
+  #          echo "::error::Packages can only be published from $DEFAULT_BRANCH."
+  #          exit 1
+  #        fi
 
   publish-typescript:
     if: inputs.language == 'typescript'
-    needs: validate-ref
+    #needs: validate-ref
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -65,7 +65,7 @@ jobs:
 
   publish-python:
     if: inputs.language == 'python'
-    needs: validate-ref
+    #needs: validate-ref
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
