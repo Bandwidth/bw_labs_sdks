@@ -15,6 +15,7 @@ import sys
 
 from bw_stt import BwSttClient, TranscriptAssembler, WordAssembler
 
+# number of words kept visible in the live \r-overwrite display
 _LIVE_WINDOW = 12
 
 
