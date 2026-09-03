@@ -15,7 +15,6 @@ import sys
 
 from bw_stt import BwSttClient, TranscriptAssembler, WordAssembler
 
-
 _LIVE_WINDOW = 12
 
 
