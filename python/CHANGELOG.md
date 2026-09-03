@@ -1,5 +1,11 @@
 # Changelog
 
+## Next
+
+- Added stereo multichannel parsing for offline transcription.
+- Added synchronous and asynchronous transcription job submission, polling, and
+  deletion with callback options and typed job errors.
+
 ## 0.1.0
 
 Initial release.

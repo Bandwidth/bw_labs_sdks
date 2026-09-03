@@ -5,6 +5,7 @@ import { buildListenUrl, buildTranscribeUrl, resolveAuthCarrier, resolveMediaOpt
 import { SttSession } from "./session";
 import type { Transcription } from "./transcribe";
 import { requestTranscription } from "./transcribe";
+import { TranscriptionsClient } from "./transcriptions";
 import type { Transport, TransportSocket } from "./transport";
 import { defaultTransport, isNode } from "./transport";
 import { isPcm16, parseWav } from "./wav";
@@ -34,11 +35,13 @@ export class BwSttClient {
   private readonly options: BwSttClientOptions;
   private readonly baseUrl: string;
   private readonly transport: Transport;
+  readonly transcriptions: TranscriptionsClient;
 
   constructor(options: BwSttClientOptions = {}) {
     this.options = options;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.transport = options.transport ?? defaultTransport;
+    this.transcriptions = new TranscriptionsClient(this.baseUrl, () => this.resolveApiKey());
   }
 
   /** Open a streaming session. Resolves on SessionOpened. */

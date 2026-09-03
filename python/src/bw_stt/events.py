@@ -18,6 +18,7 @@ __all__ = [
     "SessionOpened",
     "Transcript",
     "Transcription",
+    "TranscriptionChannel",
     "TranscriptionSegment",
     "UnknownEvent",
     "Word",
@@ -134,6 +135,18 @@ class TranscriptionSegment:
 
 
 @dataclass(frozen=True)
+class TranscriptionChannel:
+    """The transcription result for one channel of a multichannel recording."""
+
+    channel: int
+    text: str
+    words: tuple[Word, ...]
+    segments: tuple[TranscriptionSegment, ...]
+    raw: dict[str, Any] = field(repr=False)
+    redacted_entities: tuple[RedactedEntity, ...] | None = None
+
+
+@dataclass(frozen=True)
 class Transcription:
     """Result of an offline transcribe request."""
 
@@ -145,6 +158,9 @@ class Transcription:
     model_info: dict[str, Any]
     raw: dict[str, Any] = field(repr=False)
     redacted_entities: tuple[RedactedEntity, ...] | None = None
+    channels: tuple[TranscriptionChannel, ...] | None = field(
+        default=None, repr=False, compare=False
+    )
 
 
 Event: TypeAlias = SessionOpened | Segment | Transcript | ErrorEvent | SessionClosed | UnknownEvent
@@ -253,6 +269,27 @@ def _transcription_segments(obj: dict[str, Any]) -> tuple[TranscriptionSegment, 
     return tuple(segments)
 
 
+def _transcription_channels(obj: dict[str, Any]) -> tuple[TranscriptionChannel, ...]:
+    raw_channels = obj.get("channels")
+    if not isinstance(raw_channels, list):
+        raise ProtocolError("expected array 'channels' in transcribe response")
+    channels = []
+    for index, item in enumerate(raw_channels):
+        if not isinstance(item, dict):
+            raise ProtocolError(f"expected object entry channels[{index}] in transcribe response")
+        channels.append(
+            TranscriptionChannel(
+                channel=_integer(item, "channel"),
+                text=_string(item, "text"),
+                words=_words(item),
+                segments=_transcription_segments(item),
+                raw=item,
+                redacted_entities=_redacted_entities(item),
+            )
+        )
+    return tuple(channels)
+
+
 def parse_event(payload: str | bytes) -> Event:
     """Decode one server text message into a typed event.
 
@@ -323,13 +360,26 @@ def parse_transcription(payload: str | bytes) -> Transcription:
     model_info = value.get("model_info", {})
     if not isinstance(model_info, dict):
         raise ProtocolError("transcribe response model_info is not an object")
+    channels = _transcription_channels(value) if "channels" in value else None
+    if channels is None:
+        text = _string(value, "text")
+        words = _words(value)
+        segments = _transcription_segments(value)
+    else:
+        raw_text = value.get("text", "")
+        if not isinstance(raw_text, str):
+            raise ProtocolError("expected string 'text' in server message")
+        text = raw_text
+        words = _words(value)
+        segments = _transcription_segments(value)
     return Transcription(
         request_id=_string(value, "request_id"),
-        text=_string(value, "text"),
-        words=_words(value),
-        segments=_transcription_segments(value),
+        text=text,
+        words=words,
+        segments=segments,
         audio_duration_seconds=_number(value, "audio_duration_seconds"),
         model_info=model_info,
         raw=value,
         redacted_entities=_redacted_entities(value),
+        channels=channels,
     )

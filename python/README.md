@@ -136,6 +136,39 @@ A successful response has this shape:
 `words` is a timestamped word list and may be empty. `segments` always carries
 the typed segment list with `start`, `end`, and `text`.
 
+For a stereo recording, set `channels=2` and `multichannel=True` to receive an
+independent typed result for each channel. The single-channel response shape
+does not change when this option is omitted:
+
+```python
+result = client.transcribe("stereo.wav", channels=2, multichannel=True)
+for channel in result.channels or ():
+    print(channel.channel, channel.text)
+```
+
+### Asynchronous transcription jobs
+
+Use `client.transcriptions` when a recording should be processed as a job.
+Uploads accept bytes, a WAV path, or a binary file object. URL submissions send
+the audio location in JSON. `wait()` polls until the job has a completed typed
+result or raises `TranscriptionJobError` with the service error code:
+
+```python
+job = client.transcriptions.submit("call.wav")
+result = client.transcriptions.wait(job.id)
+print(result.text)
+
+url_job = client.transcriptions.submit_url(
+    "https://media.example.com/call.wav",
+    callback_url="https://hooks.example.com/stt",
+)
+print(url_job.id)
+```
+
+For stereo jobs, pass `channels=2, multichannel=True`. Callback authentication
+uses `callback_auth_header_name` and `callback_auth_header_value`. The async
+client exposes the same operations through `await client.transcriptions`.
+
 ## Live word display
 
 For word-by-word rendering, `WordAssembler` merges subword pieces into
@@ -241,6 +274,10 @@ The SDK preserves the server error code as a string. Published codes include
 `identity_revalidation_failed`, `upstream_unavailable`,
 `transcript_too_large`, and `internal_error`.
 
+Job requests additionally use `JobLimitError` for `job_limit_reached`,
+`JobPlatformUnavailableError` for `job_platform_unavailable`, and
+`TranscriptionNotFoundError` for an unknown or inaccessible job id.
+
 ```python
 from bw_stt import ConnectionClosedError, ErrorEvent, RateLimitError
 
@@ -274,9 +311,9 @@ reported by `SessionClosed.delivery_failed`.
 `base_url` accepts `ws`, `wss`, `http`, or `https` URLs; `http(s)` is
 normalized to `ws(s)` for streaming and `ws(s)` to `http(s)` for
 `transcribe()`. A base URL without a path gets the standard paths appended
-(`/audio/v1/listen` and `/audio/v1/transcribe`); a custom path is used
+(`/audio/v1/listen`, `/audio/v1/transcribe`, and `/audio/v1/transcriptions`); a custom path is used
 verbatim for streaming, with `/transcribe` substituted for a trailing
-`/listen` (or appended) for `transcribe()`:
+`/listen` (or appended) for `transcribe()` and job requests:
 
 ```python
 client = BwSttClient(base_url="wss://gateway.example.com")

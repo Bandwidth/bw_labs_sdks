@@ -4,13 +4,17 @@ export const API_KEY_HEADER = "X-BW-LABS-API-KEY";
 export const API_KEY_PARAM = "api_key";
 export const API_KEY_ENV_VAR = "BW_STT_API_KEY";
 
-// Wire names and offline media rules confirmed against the sidecar transcribe
+// Wire names and offline media rules confirmed against the transcription service
 // contract. Keep SDK-to-wire mapping in this module.
 export const PARAM_REDACT_PII = "redact_pii";
 export const PARAM_REDACT_PII_SUB = "redact_pii_sub";
 export const PARAM_REDACT_PII_RETURN = "redact_pii_return";
 export const PARAM_KEYWORDS = "keywords";
 export const TRANSCRIBE_PATH = "/audio/v1/transcribe";
+export const TRANSCRIPTIONS_PATH = "/audio/v1/transcriptions";
+export const CALLBACK_URL_PARAM = "callback_url";
+export const CALLBACK_AUTH_HEADER_NAME_PARAM = "callback_auth_header_name";
+export const CALLBACK_AUTH_HEADER_VALUE_PARAM = "callback_auth_header_value";
 export const TRANSCRIBE_WAV_CONTENT_TYPE = "audio/wav";
 export const TRANSCRIBE_RAW_CONTENT_TYPE = "application/octet-stream";
 export const TRANSCRIBE_RAW_ENCODING = "linear16";
@@ -102,6 +106,7 @@ export function appendTranscribeQuery(
     params.set("sample_rate", String(media.sampleRate));
   }
   params.set("channels", String(media.channels));
+  if (media.multichannel) params.set("multichannel", "true");
   if (media.model !== undefined) params.set("model", media.model);
   appendFeatureQuery(params, features);
 }

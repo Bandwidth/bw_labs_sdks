@@ -122,6 +122,40 @@ A successful response has this shape:
 `words` is a timestamped word list and may be empty. `segments` is a typed
 list with `start`, `end`, and `text` fields.
 
+For stereo audio, pass `channels: 2` and `multichannel: true` to transcribe
+each channel independently. The single-channel result keeps the same shape
+when `multichannel` is omitted:
+
+```ts
+const stereo = await client.transcribe(rawLinear16, {
+  channels: 2,
+  multichannel: true,
+});
+for (const channel of stereo.channels ?? []) console.log(channel.channel, channel.text);
+```
+
+### Asynchronous transcription jobs
+
+Use the `transcriptions` namespace for recordings that should be processed as
+jobs. Byte uploads use raw linear16 by default. Set `raw: false` when the bytes
+are a complete WAV container. URL submissions send the location in JSON:
+
+```ts
+const job = await client.transcriptions.submit({ audio: rawLinear16 });
+const result = await client.transcriptions.wait(job.id);
+console.log(result.text);
+
+const urlJob = await client.transcriptions.submit({
+  audioUrl: "https://media.example.com/call.wav",
+  callbackUrl: "https://hooks.example.com/stt",
+});
+console.log(urlJob.status);
+```
+
+Pass `channels: 2, multichannel: true` for independent stereo results.
+`callbackAuthHeaderName` and `callbackAuthHeaderValue` configure callback
+authentication. The namespace also provides `get(id)` and `delete(id)`.
+
 ## Streaming audio
 
 `sendAudio` sends one binary frame per call and validates it: 20 to 1000 ms of complete interleaved samples. For Opus, send exactly one raw packet per call; the duration rule does not apply.
@@ -232,6 +266,10 @@ const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul
 ## Error handling
 
 Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and timeouts. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
+
+Job requests use `JobLimitError` for `job_limit_reached`,
+`JobPlatformUnavailableError` for `job_platform_unavailable`, and
+`TranscriptionNotFoundError` for an unknown or inaccessible job id.
 
 In-band `Error` events, including `transcript_too_large`, do not throw; they
 arrive through `session.on("error", ...)` and `session.events()`. If the

@@ -43,6 +43,7 @@ from .events import (
     Transcription,
     parse_event,
 )
+from .transcriptions import AsyncTranscriptionsClient
 
 __all__ = ["AsyncBwSttClient", "AsyncSession"]
 
@@ -128,6 +129,9 @@ class AsyncBwSttClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
         self.api_key = api_key
         self.base_url = base_url or DEFAULT_BASE_URL
+        self.transcriptions = AsyncTranscriptionsClient(
+            self.base_url, lambda: _resolve_api_key(self.api_key)
+        )
 
     async def connect(
         self,
@@ -199,6 +203,7 @@ class AsyncBwSttClient:
         encoding: Literal["linear16"] = "linear16",
         sample_rate: int = 16000,
         channels: int = 1,
+        multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
         redact_pii_sub: str | None = None,
@@ -223,6 +228,7 @@ class AsyncBwSttClient:
             encoding=encoding,
             sample_rate=sample_rate,
             channels=channels,
+            multichannel=multichannel,
             model=model,
             redact_pii=redact_pii,
             redact_pii_sub=redact_pii_sub,
