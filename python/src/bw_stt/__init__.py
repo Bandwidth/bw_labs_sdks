@@ -6,9 +6,14 @@ from .errors import (
     BwSttError,
     ConnectionClosedError,
     InvalidRequestError,
+    JobLimitError,
+    JobPlatformUnavailableError,
     ProtocolError,
     RateLimitError,
     ServiceUnavailableError,
+    TranscriptionJobError,
+    TranscriptionNotFoundError,
+    TranscriptionTimeoutError,
 )
 from .events import (
     ErrorEvent,
@@ -20,18 +25,28 @@ from .events import (
     SessionOpened,
     Transcript,
     Transcription,
+    TranscriptionChannel,
     TranscriptionSegment,
     UnknownEvent,
     Word,
 )
+from .jobs import (
+    JobErrorDetail,
+    JobStatus,
+    TranscriptionJob,
+    TranscriptionJobResult,
+    TranscriptionJobSubmission,
+)
 from .sync import BwSttClient, Session
 from .transcript import DisplayWord, TranscriptAssembler, WordAssembler
+from .transcriptions import AsyncTranscriptionsClient, TranscriptionsClient
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AsyncBwSttClient",
     "AsyncSession",
+    "AsyncTranscriptionsClient",
     "AuthenticationError",
     "BwSttClient",
     "BwSttError",
@@ -40,6 +55,10 @@ __all__ = [
     "ErrorEvent",
     "Event",
     "InvalidRequestError",
+    "JobErrorDetail",
+    "JobLimitError",
+    "JobPlatformUnavailableError",
+    "JobStatus",
     "ProtocolError",
     "RateLimitError",
     "RedactedEntity",
@@ -52,7 +71,15 @@ __all__ = [
     "Transcript",
     "TranscriptAssembler",
     "Transcription",
+    "TranscriptionChannel",
+    "TranscriptionJob",
+    "TranscriptionJobError",
+    "TranscriptionJobResult",
+    "TranscriptionJobSubmission",
+    "TranscriptionNotFoundError",
     "TranscriptionSegment",
+    "TranscriptionTimeoutError",
+    "TranscriptionsClient",
     "UnknownEvent",
     "Word",
     "WordAssembler",

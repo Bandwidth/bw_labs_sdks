@@ -32,10 +32,12 @@ export class RateLimitError extends BwSttError {
   override name = "RateLimitError";
   /** Parsed from the Retry-After response header when present. */
   readonly retryAfterSeconds?: number;
+  readonly code?: string;
 
-  constructor(message: string, retryAfterSeconds?: number) {
+  constructor(message: string, retryAfterSeconds?: number, code?: string) {
     super(message);
     if (retryAfterSeconds !== undefined) this.retryAfterSeconds = retryAfterSeconds;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -44,14 +46,58 @@ export class ServiceUnavailableError extends BwSttError {
   override name = "ServiceUnavailableError";
 }
 
+/** Waiting for an asynchronous transcription job exceeded its deadline. */
+export class TranscriptionTimeoutError extends BwSttError {
+  override name = "TranscriptionTimeoutError";
+}
+
+/** A per-key or per-instance asynchronous transcription limit was reached (HTTP 429). */
+export class JobLimitError extends RateLimitError {
+  override name = "JobLimitError";
+  override readonly code: string;
+
+  constructor(message: string, retryAfterSeconds?: number, code = "job_limit_reached") {
+    super(message, retryAfterSeconds, code);
+    this.code = code;
+  }
+}
+
+/** The asynchronous transcription job platform is unavailable (HTTP 503). */
+export class JobPlatformUnavailableError extends ServiceUnavailableError {
+  override name = "JobPlatformUnavailableError";
+  readonly code = "job_platform_unavailable";
+}
+
+/** The job id is unknown or is not visible to this API key (HTTP 404). */
+export class TranscriptionNotFoundError extends BwSttError {
+  override name = "TranscriptionNotFoundError";
+  readonly code = "not_found";
+  readonly status = 404;
+}
+
+/** A transcription job reached the terminal error state. */
+export class TranscriptionJobError extends BwSttError {
+  override name = "TranscriptionJobError";
+  readonly code: string;
+  readonly jobMessage: string;
+
+  constructor(code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.code = code;
+    this.jobMessage = message;
+  }
+}
+
 /** The server rejected the request as invalid (HTTP 400, 413, or another unexpected 4xx). */
 export class InvalidRequestError extends BwSttError {
   override name = "InvalidRequestError";
   readonly status?: number;
+  readonly code?: string;
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, code?: string) {
     super(message);
     if (status !== undefined) this.status = status;
+    if (code !== undefined) this.code = code;
   }
 }
 
