@@ -29,4 +29,5 @@ def test_example_runs_against_mock(mock_server: ServerFactory, wav_file: Path) -
     )
     assert completed.returncode == 0, completed.stderr
     assert "i need a dry van" in completed.stdout
-    assert "audio seconds: 0.50" in completed.stdout
+    assert "--- performance ---" in completed.stdout
+    assert "RTF:" in completed.stdout
