@@ -16,6 +16,8 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from . import _http
 from ._framing import read_wav_file
 from ._wire import (
+    CALLBACK_AUTH_HEADER_NAME,
+    CALLBACK_AUTH_HEADER_VALUE,
     TRANSCRIBE_RAW_CONTENT_TYPE,
     TRANSCRIBE_WAV_CONTENT_TYPE,
     SessionParams,
@@ -68,15 +70,37 @@ def _callback_query(
     query: list[tuple[str, str]],
     *,
     callback_url: str | None,
+) -> None:
+    append_callback_query(query, callback_url=callback_url)
+
+
+def _callback_headers(
+    *,
     callback_auth_header_name: str | None,
     callback_auth_header_value: str | None,
-) -> None:
-    append_callback_query(
-        query,
-        callback_url=callback_url,
-        callback_auth_header_name=callback_auth_header_name,
-        callback_auth_header_value=callback_auth_header_value,
-    )
+) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if callback_auth_header_name is not None:
+        headers[CALLBACK_AUTH_HEADER_NAME] = callback_auth_header_name
+    if callback_auth_header_value is not None:
+        headers[CALLBACK_AUTH_HEADER_VALUE] = callback_auth_header_value
+    return headers
+
+
+def _callback_object(
+    *,
+    callback_url: str | None,
+    callback_auth_header_name: str | None,
+    callback_auth_header_value: str | None,
+) -> dict[str, str]:
+    callback: dict[str, str] = {}
+    if callback_url is not None:
+        callback["url"] = callback_url
+    if callback_auth_header_name is not None:
+        callback["auth_header_name"] = callback_auth_header_name
+    if callback_auth_header_value is not None:
+        callback["auth_header_value"] = callback_auth_header_value
+    return callback
 
 
 def _prepare_upload(
@@ -95,7 +119,7 @@ def _prepare_upload(
     callback_url: str | None,
     callback_auth_header_name: str | None,
     callback_auth_header_value: str | None,
-) -> tuple[bytes, str, list[tuple[str, str]]]:
+) -> tuple[bytes, str, list[tuple[str, str]], dict[str, str]]:
     raw_input = True
     if isinstance(audio, (str, Path)):
         data = Path(audio).read_bytes()
@@ -161,11 +185,12 @@ def _prepare_upload(
     _callback_query(
         query,
         callback_url=callback_url,
+    )
+    content_type = TRANSCRIBE_RAW_CONTENT_TYPE if raw_input else TRANSCRIBE_WAV_CONTENT_TYPE
+    return data, content_type, query, _callback_headers(
         callback_auth_header_name=callback_auth_header_name,
         callback_auth_header_value=callback_auth_header_value,
     )
-    content_type = TRANSCRIBE_RAW_CONTENT_TYPE if raw_input else TRANSCRIBE_WAV_CONTENT_TYPE
-    return data, content_type, query
 
 
 def _url_query(
@@ -180,9 +205,6 @@ def _url_query(
     redact_pii_return: bool,
     keywords: Sequence[str] | None,
     raw: bool,
-    callback_url: str | None,
-    callback_auth_header_name: str | None,
-    callback_auth_header_value: str | None,
 ) -> list[tuple[str, str]]:
     effective_encoding = encoding or "linear16"
     effective_sample_rate = sample_rate or 16000
@@ -211,12 +233,6 @@ def _url_query(
         if sample_rate is not None:
             prefix.append(("sample_rate", str(sample_rate)))
         query = prefix + query
-    _callback_query(
-        query,
-        callback_url=callback_url,
-        callback_auth_header_name=callback_auth_header_name,
-        callback_auth_header_value=callback_auth_header_value,
-    )
     return query
 
 
@@ -270,7 +286,7 @@ class TranscriptionsClient:
     ) -> TranscriptionJobSubmission:
         """Submit WAV, raw bytes, or a binary file object for processing."""
         _check_timeout(timeout)
-        data, content_type, query = _prepare_upload(
+        data, content_type, query, callback_headers = _prepare_upload(
             audio,
             encoding=encoding,
             sample_rate=sample_rate,
@@ -292,6 +308,7 @@ class TranscriptionsClient:
             self._api_key(),
             data=data,
             content_type=content_type,
+            headers=callback_headers,
             timeout=timeout,
         )
 
@@ -327,12 +344,17 @@ class TranscriptionsClient:
             redact_pii_return=redact_pii_return,
             keywords=keywords,
             raw=raw,
+        )
+        request_url = build_transcriptions_url(self._base_url, query=query)
+        payload: dict[str, object] = {"audio_url": url}
+        callback = _callback_object(
             callback_url=callback_url,
             callback_auth_header_name=callback_auth_header_name,
             callback_auth_header_value=callback_auth_header_value,
         )
-        request_url = build_transcriptions_url(self._base_url, query=query)
-        body = json.dumps({"audio_url": url}, separators=(",", ":")).encode("utf-8")
+        if callback:
+            payload["callback"] = callback
+        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         return _http.submit_job(
             request_url,
             self._api_key(),

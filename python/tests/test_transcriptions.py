@@ -42,7 +42,7 @@ def _status(
     }
 
 
-def test_submit_upload_and_callbacks(
+def test_submit_upload_sends_callback_credentials_as_headers(
     mock_transcriptions_server: JobServerFactory, api_key_env: str
 ) -> None:
     server = mock_transcriptions_server([HttpScript(status=202, body=_submission())])
@@ -68,8 +68,10 @@ def test_submit_upload_and_callbacks(
     assert dict(query)["multichannel"] == "true"
     assert dict(query)["channels"] == "2"
     assert dict(query)["callback_url"] == "https://hooks.example.test/stt"
-    assert dict(query)["callback_auth_header_name"] == "X-Callback-Key"
-    assert dict(query)["callback_auth_header_value"] == "callback-secret"
+    assert "callback_auth_header_name" not in dict(query)
+    assert "callback_auth_header_value" not in dict(query)
+    assert request.headers["x-callback-auth-name"] == "X-Callback-Key"
+    assert request.headers["x-callback-auth-value"] == "callback-secret"
 
 
 def test_submit_url_sends_json_and_options(
@@ -82,16 +84,31 @@ def test_submit_url_sends_json_and_options(
         sample_rate=8000,
         channels=2,
         multichannel=True,
+        callback_url="https://hooks.example.test/stt",
+        callback_auth_header_name="X-Callback-Key",
+        callback_auth_header_value="callback-secret",
     )
 
     assert result.status == "queued"
     request = server.requests[0]
     assert request.headers["content-type"] == "application/json"
-    assert json.loads(request.body) == {"audio_url": "https://media.example.test/call.wav"}
+    assert json.loads(request.body) == {
+        "audio_url": "https://media.example.test/call.wav",
+        "callback": {
+            "url": "https://hooks.example.test/stt",
+            "auth_header_name": "X-Callback-Key",
+            "auth_header_value": "callback-secret",
+        },
+    }
     query = dict(parse_qsl(urlsplit(request.path or "").query))
     assert query["channels"] == "2"
     assert query["multichannel"] == "true"
     assert query["sample_rate"] == "8000"
+    assert "callback_url" not in query
+    assert "callback_auth_header_name" not in query
+    assert "callback_auth_header_value" not in query
+    assert "x-callback-auth-name" not in request.headers
+    assert "x-callback-auth-value" not in request.headers
     assert request.headers["x-bw-labs-api-key"] == api_key_env
 
 
@@ -236,6 +253,25 @@ def test_job_http_error_mapping(
     )
     with pytest.raises(expected) as excinfo:
         BwSttClient(base_url=server.base_url).transcriptions.get("foreign")
+    assert api_key_env not in str(excinfo.value)
+
+
+def test_job_submission_busy_maps_to_job_limit_error_with_retry_after(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server(
+        [
+            HttpScript(
+                status=429,
+                headers={"Retry-After": "5"},
+                body={"code": "job_submission_busy", "message": api_key_env},
+            )
+        ]
+    )
+    with pytest.raises(JobLimitError) as excinfo:
+        BwSttClient(base_url=server.base_url).transcriptions.submit(b"\0" * 3200)
+    assert excinfo.value.code == "job_submission_busy"
+    assert excinfo.value.retry_after == pytest.approx(5.0)
     assert api_key_env not in str(excinfo.value)
 
 

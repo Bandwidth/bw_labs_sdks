@@ -46,13 +46,14 @@ export class ServiceUnavailableError extends BwSttError {
   override name = "ServiceUnavailableError";
 }
 
-/** The asynchronous transcription job limit was reached (HTTP 429). */
+/** A per-key or per-instance asynchronous transcription limit was reached (HTTP 429). */
 export class JobLimitError extends RateLimitError {
   override name = "JobLimitError";
-  override readonly code = "job_limit_reached";
+  override readonly code: string;
 
-  constructor(message: string, retryAfterSeconds?: number) {
-    super(message, retryAfterSeconds, "job_limit_reached");
+  constructor(message: string, retryAfterSeconds?: number, code = "job_limit_reached") {
+    super(message, retryAfterSeconds, code);
+    this.code = code;
   }
 }
 

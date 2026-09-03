@@ -16,8 +16,8 @@ import {
 } from "./options";
 import {
   API_KEY_HEADER,
-  CALLBACK_AUTH_HEADER_NAME_PARAM,
-  CALLBACK_AUTH_HEADER_VALUE_PARAM,
+  CALLBACK_AUTH_HEADER_NAME,
+  CALLBACK_AUTH_HEADER_VALUE,
   CALLBACK_URL_PARAM,
   TRANSCRIBE_RAW_CONTENT_TYPE,
   TRANSCRIBE_WAV_CONTENT_TYPE,
@@ -56,7 +56,7 @@ export type TranscriptionJobResult = Transcription;
 export interface TranscriptionJobOptions extends TranscribeOptions {
   /** Set true when the submitted bytes are headerless linear16 audio. */
   raw?: boolean;
-  /** HTTPS callback destination for job completion notifications. */
+  /** HTTP or HTTPS callback destination for job completion notifications. */
   callbackUrl?: string;
   /** Header name to include on callback requests. */
   callbackAuthHeaderName?: string;
@@ -190,14 +190,33 @@ function buildJobQuery(options: TranscriptionJobOptions, rawInput: boolean, urlS
     if (options.encoding !== undefined) query.set("encoding", options.encoding);
     if (options.sampleRate !== undefined) query.set("sample_rate", String(options.sampleRate));
   }
-  if (options.callbackUrl !== undefined) query.append(CALLBACK_URL_PARAM, options.callbackUrl);
+  if (!urlSource && options.callbackUrl !== undefined) query.append(CALLBACK_URL_PARAM, options.callbackUrl);
+  return query;
+}
+
+function buildUrlSubmissionBody(audioUrl: string, options: TranscriptionJobOptions): string {
+  const payload: { audio_url: string; callback?: Record<string, string> } = { audio_url: audioUrl };
+  const callback: Record<string, string> = {};
+  if (options.callbackUrl !== undefined) callback.url = options.callbackUrl;
   if (options.callbackAuthHeaderName !== undefined) {
-    query.append(CALLBACK_AUTH_HEADER_NAME_PARAM, options.callbackAuthHeaderName);
+    callback.auth_header_name = options.callbackAuthHeaderName;
   }
   if (options.callbackAuthHeaderValue !== undefined) {
-    query.append(CALLBACK_AUTH_HEADER_VALUE_PARAM, options.callbackAuthHeaderValue);
+    callback.auth_header_value = options.callbackAuthHeaderValue;
   }
-  return query;
+  if (Object.keys(callback).length > 0) payload.callback = callback;
+  return JSON.stringify(payload);
+}
+
+function buildUploadCallbackHeaders(options: TranscriptionJobOptions): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (options.callbackAuthHeaderName !== undefined) {
+    headers[CALLBACK_AUTH_HEADER_NAME] = options.callbackAuthHeaderName;
+  }
+  if (options.callbackAuthHeaderValue !== undefined) {
+    headers[CALLBACK_AUTH_HEADER_VALUE] = options.callbackAuthHeaderValue;
+  }
+  return headers;
 }
 
 function jobUrl(baseUrl: string, id: string): string {
@@ -225,6 +244,7 @@ interface JobRequest {
   readonly method: "POST" | "GET" | "DELETE";
   readonly body?: Uint8Array | string;
   readonly contentType?: string;
+  readonly headers?: Record<string, string>;
   readonly expectedStatus: number;
   readonly timeoutMs: number;
   readonly signal: AbortSignal | undefined;
@@ -256,9 +276,15 @@ async function mapJobFailure(response: Response, apiKey: string, operation: stri
     return new TranscriptionNotFoundError(`transcription job not found (HTTP ${status})`);
   }
   if (status === 429) {
+    const jobCode = code ?? "job_limit_reached";
+    const defaultMessage =
+      jobCode === "job_submission_busy"
+        ? "transcription submission is busy (HTTP 429)"
+        : "transcription job limit reached (HTTP 429)";
     return new JobLimitError(
-      `transcription job limit reached (HTTP 429)${suffix}`,
+      `${defaultMessage}${suffix}`,
       parseRetryAfter(response.headers.get("retry-after")),
+      jobCode,
     );
   }
   if (status === 503) {
@@ -286,6 +312,7 @@ async function requestJob(request: JobRequest): Promise<unknown> {
         method: request.method,
         headers: {
           [API_KEY_HEADER]: request.apiKey,
+          ...(request.headers ?? {}),
           ...(request.contentType === undefined ? {} : { "Content-Type": request.contentType }),
         },
         ...(request.body === undefined ? {} : { body: request.body }),
@@ -341,7 +368,7 @@ export class TranscriptionsClient {
       const audioUrl = request.audioUrl as string;
       if (audioUrl.length === 0) throw new TypeError("audioUrl must not be empty");
       rawInput = request.raw ?? false;
-      body = JSON.stringify({ audio_url: audioUrl });
+      body = buildUrlSubmissionBody(audioUrl, request);
       contentType = "application/json";
     }
     const query = buildJobQuery(request, rawInput, !hasAudio);
@@ -351,6 +378,7 @@ export class TranscriptionsClient {
       method: "POST",
       body,
       contentType,
+      ...(hasAudio ? { headers: buildUploadCallbackHeaders(request) } : {}),
       expectedStatus: 202,
       timeoutMs,
       signal: request.signal,

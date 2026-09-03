@@ -49,12 +49,18 @@ class ServiceUnavailableError(BwSttError):
 
 
 class JobLimitError(RateLimitError):
-    """The per-key in-flight transcription job limit was reached."""
+    """A per-key or per-instance asynchronous transcription limit was reached."""
 
     code = "job_limit_reached"
 
-    def __init__(self, message: str, retry_after: float | None = None) -> None:
-        super().__init__(message, retry_after=retry_after, code=self.code)
+    def __init__(
+        self,
+        message: str,
+        retry_after: float | None = None,
+        *,
+        code: str | None = None,
+    ) -> None:
+        super().__init__(message, retry_after=retry_after, code=self.code if code is None else code)
 
 
 JobLimitReachedError = JobLimitError

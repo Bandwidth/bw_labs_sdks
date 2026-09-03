@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -225,9 +225,16 @@ def _map_job_http_error(exc: urllib.error.HTTPError, operation: str, api_key: st
     if status == 404:
         return TranscriptionNotFoundError(f"transcription job not found (HTTP {status})")
     if status == 429:
+        job_code = code or JobLimitError.code
+        default = (
+            "transcription submission is busy (HTTP 429)"
+            if job_code == "job_submission_busy"
+            else "transcription job limit reached (HTTP 429)"
+        )
         return JobLimitError(
-            _job_detail("transcription job limit reached (HTTP 429)", code, message, api_key),
+            _job_detail(default, code, message, api_key),
             retry_after=parse_retry_after(exc.headers.get("Retry-After")),
+            code=job_code,
         )
     if status == 503:
         return JobPlatformUnavailableError(
@@ -259,10 +266,13 @@ def _request(
     method: str,
     data: bytes | None,
     content_type: str | None,
+    extra_headers: Mapping[str, str] | None,
     timeout: float,
     operation: str,
 ) -> tuple[int, bytes]:
     headers = {API_KEY_HEADER: api_key}
+    if extra_headers is not None:
+        headers.update(extra_headers)
     if content_type is not None:
         headers["Content-Type"] = content_type
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
@@ -292,6 +302,7 @@ def submit_job(
     *,
     data: bytes,
     content_type: str,
+    headers: Mapping[str, str] | None = None,
     timeout: float,
 ) -> TranscriptionJobSubmission:
     status, body = _request(
@@ -300,6 +311,7 @@ def submit_job(
         method="POST",
         data=data,
         content_type=content_type,
+        extra_headers=headers,
         timeout=timeout,
         operation="transcription submission",
     )
@@ -315,6 +327,7 @@ def get_job(url: str, api_key: str, *, timeout: float) -> TranscriptionJob:
         method="GET",
         data=None,
         content_type=None,
+        extra_headers=None,
         timeout=timeout,
         operation="transcription job lookup",
     )
@@ -330,6 +343,7 @@ def delete_job(url: str, api_key: str, *, timeout: float) -> None:
         method="DELETE",
         data=None,
         content_type=None,
+        extra_headers=None,
         timeout=timeout,
         operation="transcription job deletion",
     )

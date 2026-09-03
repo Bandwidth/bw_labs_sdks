@@ -5,6 +5,9 @@
 - Added stereo multichannel parsing for offline transcription.
 - Added transcription job submission, polling, deletion, callback options, and
   typed job errors.
+- Updated callback credential transport to use request headers for uploads and
+  the JSON callback object for URL submissions. Added `job_submission_busy`
+  handling with `retryAfterSeconds` on `JobLimitError`.
 
 ## 0.1.0
 

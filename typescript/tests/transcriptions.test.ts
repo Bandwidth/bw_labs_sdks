@@ -130,7 +130,7 @@ function client(): BwSttClient {
 }
 
 describe("transcriptions.submit", () => {
-  it("uploads bytes with multichannel and callback query parameters", async () => {
+  it("uploads bytes with callback credentials in request headers", async () => {
     server.responses = [{ status: 202, body: SUBMISSION }];
     const audio = pcmBytes(3200);
     const submission = await client().transcriptions.submit({
@@ -155,8 +155,10 @@ describe("transcriptions.submit", () => {
     expect(request.url.searchParams.get("multichannel")).toBe("true");
     expect(request.url.searchParams.get("model")).toBe("pinned");
     expect(request.url.searchParams.get("callback_url")).toBe("https://hooks.example.test/stt");
-    expect(request.url.searchParams.get("callback_auth_header_name")).toBe("X-Callback-Key");
-    expect(request.url.searchParams.get("callback_auth_header_value")).toBe("callback-secret");
+    expect(request.url.searchParams.get("callback_auth_header_name")).toBeNull();
+    expect(request.url.searchParams.get("callback_auth_header_value")).toBeNull();
+    expect(request.headers["x-callback-auth-name"]).toBe("X-Callback-Key");
+    expect(request.headers["x-callback-auth-value"]).toBe("callback-secret");
   });
 
   it("submits an audio URL as JSON and preserves explicit media options", async () => {
@@ -166,13 +168,28 @@ describe("transcriptions.submit", () => {
       sampleRate: 8000,
       channels: 2,
       multichannel: true,
+      callbackUrl: "https://hooks.example.test/stt",
+      callbackAuthHeaderName: "X-Callback-Key",
+      callbackAuthHeaderValue: "callback-secret",
     });
     const request = server.requests[0]!;
     expect(request.headers["content-type"]).toBe("application/json");
-    expect(JSON.parse(request.body.toString())).toEqual({ audio_url: "https://media.example.test/call.wav" });
+    expect(JSON.parse(request.body.toString())).toEqual({
+      audio_url: "https://media.example.test/call.wav",
+      callback: {
+        url: "https://hooks.example.test/stt",
+        auth_header_name: "X-Callback-Key",
+        auth_header_value: "callback-secret",
+      },
+    });
     expect(request.url.searchParams.get("sample_rate")).toBe("8000");
     expect(request.url.searchParams.get("channels")).toBe("2");
     expect(request.url.searchParams.get("multichannel")).toBe("true");
+    expect(request.url.searchParams.get("callback_url")).toBeNull();
+    expect(request.url.searchParams.get("callback_auth_header_name")).toBeNull();
+    expect(request.url.searchParams.get("callback_auth_header_value")).toBeNull();
+    expect(request.headers["x-callback-auth-name"]).toBeUndefined();
+    expect(request.headers["x-callback-auth-value"]).toBeUndefined();
   });
 });
 
@@ -218,6 +235,12 @@ describe("transcriptions lifecycle", () => {
     const unavailable = await client().transcriptions.get("job-1").catch((error: unknown) => error);
     expect(unavailable).toBeInstanceOf(JobPlatformUnavailableError);
     expect((unavailable as Error).message).not.toContain(KEY);
+    server.responses = [{ status: 429, headers: { "retry-after": "5" }, body: { code: "job_submission_busy", message: KEY } }];
+    const busy = await client().transcriptions.submit({ audio: pcmBytes(3200) }).catch((error: unknown) => error);
+    expect(busy).toBeInstanceOf(JobLimitError);
+    expect((busy as JobLimitError).code).toBe("job_submission_busy");
+    expect((busy as JobLimitError).retryAfterSeconds).toBe(5);
+    expect((busy as Error).message).not.toContain(KEY);
   });
 });
 

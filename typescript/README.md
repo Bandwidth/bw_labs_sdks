@@ -148,13 +148,20 @@ console.log(result.text);
 const urlJob = await client.transcriptions.submit({
   audioUrl: "https://media.example.com/call.wav",
   callbackUrl: "https://hooks.example.com/stt",
+  callbackAuthHeaderName: "X-Callback-Key",
+  callbackAuthHeaderValue: "callback-secret",
 });
 console.log(urlJob.status);
 ```
 
 Pass `channels: 2, multichannel: true` for independent stereo results.
-`callbackAuthHeaderName` and `callbackAuthHeaderValue` configure callback
-authentication. The namespace also provides `get(id)` and `delete(id)`.
+For upload callbacks, `callbackUrl` is a query parameter and
+`callbackAuthHeaderName` and `callbackAuthHeaderValue` travel in the
+`X-Callback-Auth-Name` and `X-Callback-Auth-Value` request headers. URL
+submissions put all three callback options in the JSON `callback` object. The
+SDK never sends callback credentials in the query. The namespace also provides
+`get(id)` and `delete(id)`. The service applies one 512 MiB upload limit to both
+direct uploads and audio downloaded from a URL.
 
 ## Streaming audio
 
@@ -267,9 +274,11 @@ const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul
 
 Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and timeouts. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
 
-Job requests use `JobLimitError` for `job_limit_reached`,
-`JobPlatformUnavailableError` for `job_platform_unavailable`, and
-`TranscriptionNotFoundError` for an unknown or inaccessible job id.
+Job requests use `JobLimitError` for `job_limit_reached` and
+`job_submission_busy`; both expose `retryAfterSeconds` when the server sends
+`Retry-After`. `JobPlatformUnavailableError` represents
+`job_platform_unavailable`, and `TranscriptionNotFoundError` represents an
+unknown or inaccessible job id.
 
 In-band `Error` events, including `transcript_too_large`, do not throw; they
 arrive through `session.on("error", ...)` and `session.events()`. If the

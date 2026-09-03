@@ -161,13 +161,19 @@ print(result.text)
 url_job = client.transcriptions.submit_url(
     "https://media.example.com/call.wav",
     callback_url="https://hooks.example.com/stt",
+    callback_auth_header_name="X-Callback-Key",
+    callback_auth_header_value="callback-secret",
 )
 print(url_job.id)
 ```
 
-For stereo jobs, pass `channels=2, multichannel=True`. Callback authentication
-uses `callback_auth_header_name` and `callback_auth_header_value`. The async
-client exposes the same operations through `await client.transcriptions`.
+For stereo jobs, pass `channels=2, multichannel=True`. Upload callbacks keep
+`callback_url` in the query and send the credential metadata in the
+`X-Callback-Auth-Name` and `X-Callback-Auth-Value` request headers. URL
+submissions put the URL and credential metadata in the JSON `callback` object.
+The SDK never sends callback credentials in the query. The async client exposes
+the same operations through `await client.transcriptions`. The service applies
+one 512 MiB upload limit to both direct uploads and audio downloaded from a URL.
 
 ## Live word display
 
@@ -274,9 +280,10 @@ The SDK preserves the server error code as a string. Published codes include
 `identity_revalidation_failed`, `upstream_unavailable`,
 `transcript_too_large`, and `internal_error`.
 
-Job requests additionally use `JobLimitError` for `job_limit_reached`,
-`JobPlatformUnavailableError` for `job_platform_unavailable`, and
-`TranscriptionNotFoundError` for an unknown or inaccessible job id.
+Job requests additionally use `JobLimitError` for `job_limit_reached` and
+`job_submission_busy`; both expose the server's `retry_after` value when
+present. `JobPlatformUnavailableError` represents `job_platform_unavailable`,
+and `TranscriptionNotFoundError` represents an unknown or inaccessible job id.
 
 ```python
 from bw_stt import ConnectionClosedError, ErrorEvent, RateLimitError

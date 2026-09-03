@@ -28,8 +28,8 @@ TRANSCRIBE_RAW_CONTENT_TYPE = "application/octet-stream"
 TRANSCRIBE_RAW_ENCODING = "linear16"
 TRANSCRIBE_MAX_AUDIO_DESCRIPTION = "five minutes"
 CALLBACK_URL_PARAM = "callback_url"
-CALLBACK_AUTH_HEADER_NAME_PARAM = "callback_auth_header_name"
-CALLBACK_AUTH_HEADER_VALUE_PARAM = "callback_auth_header_value"
+CALLBACK_AUTH_HEADER_NAME = "X-Callback-Auth-Name"
+CALLBACK_AUTH_HEADER_VALUE = "X-Callback-Auth-Value"
 
 _WS_SCHEMES = {"ws": "ws", "wss": "wss", "http": "ws", "https": "wss"}
 _HTTP_SCHEMES = {"ws": "http", "wss": "https", "http": "http", "https": "https"}
@@ -208,13 +208,7 @@ def append_callback_query(
     query: list[tuple[str, str]],
     *,
     callback_url: str | None = None,
-    callback_auth_header_name: str | None = None,
-    callback_auth_header_value: str | None = None,
 ) -> None:
-    """Append callback parameters using their public wire names."""
+    """Append the callback URL query parameter."""
     if callback_url is not None:
         query.append((CALLBACK_URL_PARAM, callback_url))
-    if callback_auth_header_name is not None:
-        query.append((CALLBACK_AUTH_HEADER_NAME_PARAM, callback_auth_header_name))
-    if callback_auth_header_value is not None:
-        query.append((CALLBACK_AUTH_HEADER_VALUE_PARAM, callback_auth_header_value))
