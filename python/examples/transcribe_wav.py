@@ -11,17 +11,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
+import time
 
 from bw_stt import BwSttClient, TranscriptAssembler, WordAssembler
 
-# number of words kept visible in the live \r-overwrite display
-_LIVE_WINDOW = 12
-
 
 def render(words: WordAssembler) -> None:
-    tail = words.words[-_LIVE_WINDOW:]
-    print("\r" + " ".join(w.text for w in tail), end="", flush=True)
+    # Fit the live display within the current terminal width so \r never wraps.
+    cols = shutil.get_terminal_size().columns
+    line = " ".join(w.text for w in words.words)
+    print("\r" + line[-cols:], end="", flush=True)
 
 
 def main() -> int:
@@ -40,6 +41,7 @@ def main() -> int:
     client = BwSttClient(base_url=os.environ.get("BW_STT_BASE_URL"))
     words = WordAssembler()
     transcript = TranscriptAssembler()
+    t_start = time.monotonic()
     with client.connect(sample_rate=args.rate) as session:
         session.on_segment(words.push)
         session.on_segment(transcript.push)
@@ -48,8 +50,18 @@ def main() -> int:
         closed = session.close_stream()
         render(words)
         print()
-        print(transcript.text.strip())
-        print(f"audio seconds: {closed.audio_duration_seconds:.2f}")
+
+    elapsed = time.monotonic() - t_start
+    audio_s = closed.audio_duration_seconds
+    word_count = len(transcript.text.split())
+
+    print(transcript.text.strip())
+    print()
+    print("--- performance ---")
+    print(f"audio:    {int(audio_s // 60)}m {audio_s % 60:.0f}s")
+    print(f"elapsed:  {int(elapsed // 60)}m {elapsed % 60:.1f}s")
+    print(f"RTF:      {elapsed / audio_s:.3f}x  (real-time = 1.0)")
+    print(f"words:    {word_count:,}")
     return 0
 
 
