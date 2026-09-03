@@ -206,7 +206,7 @@ DEFAULT_TRANSCRIPTION: dict[str, Any] = {
     ],
     "segments": [{"start": 0.0, "end": 0.72, "text": "i need a dry van"}],
     "audio_duration_seconds": 2.5,
-    "model_info": {"name": "bw-streaming-en", "version": "current"},
+    "model_info": {"name": "bw-listen-en", "version": "current"},
 }
 
 

@@ -14,7 +14,6 @@ from typing import BinaryIO, Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from . import _http
-from ._framing import read_wav_file
 from ._wire import (
     CALLBACK_AUTH_HEADER_NAME,
     CALLBACK_AUTH_HEADER_VALUE,
@@ -27,6 +26,7 @@ from ._wire import (
 from .errors import (
     ProtocolError,
     TranscriptionJobError,
+    TranscriptionTimeoutError,
 )
 from .events import Transcription
 from .jobs import TranscriptionJob, TranscriptionJobSubmission
@@ -39,7 +39,7 @@ __all__ = [
 
 AudioInput = bytes | str | Path | BinaryIO
 _DEFAULT_JOB_TIMEOUT = 120.0
-_DEFAULT_WAIT_TIMEOUT = 300.0
+_DEFAULT_WAIT_TIMEOUT = 600.0
 
 
 def _check_timeout(timeout: float, name: str = "timeout") -> None:
@@ -64,6 +64,35 @@ def _wav_info(data: bytes, label: str) -> tuple[int, int]:
             return reader.getframerate(), reader.getnchannels()
     except (EOFError, OSError, wave.Error) as exc:
         raise ValueError(f"{label} is not a readable WAV file") from exc
+
+
+def _is_wav(data: bytes) -> bool:
+    return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WAVE"
+
+
+def _wav_parameters(
+    data: bytes,
+    *,
+    label: str,
+    encoding: Literal["linear16"],
+    sample_rate: int,
+    channels: int,
+) -> tuple[int, int]:
+    if encoding != "linear16":
+        raise ValueError(
+            "WAV input requires encoding='linear16'; pass raw=True to send "
+            "headerless linear16 audio bytes"
+        )
+    wav_sample_rate, wav_channels = _wav_info(data, label)
+    if sample_rate != 16000 and sample_rate != wav_sample_rate:
+        raise ValueError(
+            f"WAV input is {wav_sample_rate} Hz, the request specifies {sample_rate} Hz"
+        )
+    if channels != 1 and channels != wav_channels:
+        raise ValueError(
+            f"WAV input has {wav_channels} channel(s), the request specifies {channels}"
+        )
+    return wav_sample_rate, wav_channels
 
 
 def _callback_query(
@@ -124,44 +153,39 @@ def _prepare_upload(
     if isinstance(audio, (str, Path)):
         data = Path(audio).read_bytes()
         if not raw:
-            if encoding != "linear16":
-                raise ValueError(
-                    "WAV input requires encoding='linear16'; pass raw=True to send "
-                    "headerless linear16 audio bytes"
-                )
-            _, wav_sample_rate, wav_channels = read_wav_file(audio)
-            if sample_rate != 16000 and sample_rate != wav_sample_rate:
-                raise ValueError(
-                    f"WAV input is {wav_sample_rate} Hz, the request specifies {sample_rate} Hz"
-                )
-            if channels != 1 and channels != wav_channels:
-                raise ValueError(
-                    f"WAV input has {wav_channels} channel(s), the request specifies {channels}"
-                )
-            sample_rate, channels = wav_sample_rate, wav_channels
+            sample_rate, channels = _wav_parameters(
+                data,
+                label="audio file",
+                encoding=encoding,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
             raw_input = False
+        elif encoding != "linear16":
+            raise ValueError("raw transcription uploads require encoding='linear16'")
     elif isinstance(audio, bytes):
         data = audio
-        if encoding != "linear16":
+        if not raw and _is_wav(data):
+            sample_rate, channels = _wav_parameters(
+                data,
+                label="audio bytes",
+                encoding=encoding,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
+            raw_input = False
+        elif encoding != "linear16":
             raise ValueError("raw transcription uploads require encoding='linear16'")
     else:
         data = _read_file_audio(audio)
-        if not raw and data.startswith(b"RIFF") and len(data) >= 12 and data[8:12] == b"WAVE":
-            if encoding != "linear16":
-                raise ValueError(
-                    "WAV input requires encoding='linear16'; pass raw=True to send "
-                    "headerless linear16 audio bytes"
-                )
-            wav_sample_rate, wav_channels = _wav_info(data, "audio file")
-            if sample_rate != 16000 and sample_rate != wav_sample_rate:
-                raise ValueError(
-                    f"WAV input is {wav_sample_rate} Hz, the request specifies {sample_rate} Hz"
-                )
-            if channels != 1 and channels != wav_channels:
-                raise ValueError(
-                    f"WAV input has {wav_channels} channel(s), the request specifies {channels}"
-                )
-            sample_rate, channels = wav_sample_rate, wav_channels
+        if not raw and _is_wav(data):
+            sample_rate, channels = _wav_parameters(
+                data,
+                label="audio file",
+                encoding=encoding,
+                sample_rate=sample_rate,
+                channels=channels,
+            )
             raw_input = False
         elif not raw:
             raise ValueError("audio file must be a WAV file; pass raw=True for raw audio bytes")
@@ -187,9 +211,14 @@ def _prepare_upload(
         callback_url=callback_url,
     )
     content_type = TRANSCRIBE_RAW_CONTENT_TYPE if raw_input else TRANSCRIBE_WAV_CONTENT_TYPE
-    return data, content_type, query, _callback_headers(
-        callback_auth_header_name=callback_auth_header_name,
-        callback_auth_header_value=callback_auth_header_value,
+    return (
+        data,
+        content_type,
+        query,
+        _callback_headers(
+            callback_auth_header_name=callback_auth_header_name,
+            callback_auth_header_value=callback_auth_header_value,
+        ),
     )
 
 
@@ -206,9 +235,11 @@ def _url_query(
     keywords: Sequence[str] | None,
     raw: bool,
 ) -> list[tuple[str, str]]:
+    if raw and multichannel and channels != 2:
+        raise ValueError("multichannel=True requires channels=2 for raw audio")
     effective_encoding = encoding or "linear16"
     effective_sample_rate = sample_rate or 16000
-    effective_channels = channels if channels is not None else 1
+    effective_channels = channels if channels is not None else (2 if multichannel else 1)
     params = SessionParams(
         encoding=effective_encoding,
         sample_rate=effective_sample_rate,
@@ -223,9 +254,7 @@ def _url_query(
     query = params.query(transcribe_raw=raw)
     if not raw:
         query = [
-            (name, value)
-            for name, value in query
-            if name != "channels" or channels is not None or multichannel
+            (name, value) for name, value in query if name != "channels" or channels is not None
         ]
         prefix: list[tuple[str, str]] = []
         if encoding is not None:
@@ -284,7 +313,14 @@ class TranscriptionsClient:
         callback_auth_header_value: str | None = None,
         timeout: float = _DEFAULT_JOB_TIMEOUT,
     ) -> TranscriptionJobSubmission:
-        """Submit WAV, raw bytes, or a binary file object for processing."""
+        """Submit WAV, raw bytes, or a binary file object for processing.
+
+        With ``raw=False``, bytes and binary file objects beginning with a
+        RIFF/WAVE header are uploaded as WAV and their header supplies the
+        sample rate and channel count. Other bytes are treated as raw
+        linear16; ``raw=True`` always forces raw treatment. Uploads are fully
+        buffered in memory.
+        """
         _check_timeout(timeout)
         data, content_type, query, callback_headers = _prepare_upload(
             audio,
@@ -384,14 +420,18 @@ class TranscriptionsClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"transcription job wait timed out after {timeout:g}s")
+                raise TranscriptionTimeoutError(
+                    f"transcription job wait timed out after {timeout:g}s"
+                )
             job = self.get(id, timeout=min(_DEFAULT_JOB_TIMEOUT, remaining))
             result = _terminal_result(job, api_key)
             if result is not None:
                 return result
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"transcription job wait timed out after {timeout:g}s")
+                raise TranscriptionTimeoutError(
+                    f"transcription job wait timed out after {timeout:g}s"
+                )
             time.sleep(min(poll_interval, remaining))
 
     def delete(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> None:
@@ -500,14 +540,18 @@ class AsyncTranscriptionsClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"transcription job wait timed out after {timeout:g}s")
+                raise TranscriptionTimeoutError(
+                    f"transcription job wait timed out after {timeout:g}s"
+                )
             job = await self.get(id, timeout=min(_DEFAULT_JOB_TIMEOUT, remaining))
             result = _terminal_result(job, api_key)
             if result is not None:
                 return result
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError(f"transcription job wait timed out after {timeout:g}s")
+                raise TranscriptionTimeoutError(
+                    f"transcription job wait timed out after {timeout:g}s"
+                )
             await asyncio.sleep(min(poll_interval, remaining))
 
     async def delete(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> None:

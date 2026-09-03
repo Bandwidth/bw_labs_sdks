@@ -1,13 +1,18 @@
 # Changelog
 
-## Next
+## 0.2.0
 
-- Added stereo multichannel parsing for offline transcription.
-- Added synchronous and asynchronous transcription job submission, polling, and
-  deletion with callback options and typed job errors.
-- Updated callback credential transport to use request headers for uploads and
-  the JSON callback object for URL submissions. Added `job_submission_busy`
-  handling with `retry_after` on `JobLimitError`.
+- Added synchronous and asynchronous transcription jobs with `submit`,
+  `submit_url`, `get`, `wait`, and `delete`.
+- Added typed multichannel transcription results that match the service's
+  per-channel response shape.
+- Added callback credential transport through upload request headers or the
+  URL submission JSON callback object, plus `job_submission_busy` handling with
+  `retry_after` on `JobLimitError`.
+- Added `TranscriptionTimeoutError` for `wait()` deadlines, with a 600 second
+  default timeout and a 2 second polling interval.
+- Added RIFF/WAVE sniffing for byte uploads when `raw=False`, so WAV bytes keep
+  their container and omit raw-only parameters.
 
 ## 0.1.0
 

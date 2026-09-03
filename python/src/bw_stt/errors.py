@@ -13,14 +13,13 @@ __all__ = [
     "ConnectionClosedError",
     "InvalidRequestError",
     "JobLimitError",
-    "JobLimitReachedError",
     "JobPlatformUnavailableError",
-    "NotFoundError",
     "ProtocolError",
     "RateLimitError",
     "ServiceUnavailableError",
     "TranscriptionJobError",
     "TranscriptionNotFoundError",
+    "TranscriptionTimeoutError",
 ]
 
 
@@ -48,6 +47,10 @@ class ServiceUnavailableError(BwSttError):
     """The service is temporarily unavailable (HTTP 5xx)."""
 
 
+class TranscriptionTimeoutError(BwSttError, TimeoutError):
+    """Waiting for an asynchronous transcription job exceeded its deadline."""
+
+
 class JobLimitError(RateLimitError):
     """A per-key or per-instance asynchronous transcription limit was reached."""
 
@@ -63,9 +66,6 @@ class JobLimitError(RateLimitError):
         super().__init__(message, retry_after=retry_after, code=self.code if code is None else code)
 
 
-JobLimitReachedError = JobLimitError
-
-
 class JobPlatformUnavailableError(ServiceUnavailableError):
     """The asynchronous transcription job platform is unavailable."""
 
@@ -77,9 +77,6 @@ class TranscriptionNotFoundError(BwSttError):
 
     code = "not_found"
     status = 404
-
-
-NotFoundError = TranscriptionNotFoundError
 
 
 class TranscriptionJobError(BwSttError):
@@ -95,9 +92,7 @@ class TranscriptionJobError(BwSttError):
 class InvalidRequestError(BwSttError):
     """The server rejected the request as invalid (HTTP 400 or 413)."""
 
-    def __init__(
-        self, message: str, *, code: str | None = None, status: int | None = None
-    ) -> None:
+    def __init__(self, message: str, *, code: str | None = None, status: int | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.status = status

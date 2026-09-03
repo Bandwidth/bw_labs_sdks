@@ -21,14 +21,13 @@ export {
   ConnectionClosedError,
   InvalidRequestError,
   JobLimitError,
-  JobLimitReachedError,
   JobPlatformUnavailableError,
-  NotFoundError,
   ProtocolError,
   RateLimitError,
   ServiceUnavailableError,
   TranscriptionJobError,
   TranscriptionNotFoundError,
+  TranscriptionTimeoutError,
 } from "./errors";
 export { TranscriptAssembler, WordAssembler } from "./transcript";
 export type { DisplayWord } from "./transcript";

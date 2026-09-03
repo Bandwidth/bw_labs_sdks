@@ -5,10 +5,13 @@ import { BwSttClient } from "../src/client";
 import {
   JobLimitError,
   JobPlatformUnavailableError,
+  ProtocolError,
   TranscriptionJobError,
   TranscriptionNotFoundError,
+  TranscriptionTimeoutError,
 } from "../src/errors";
-import { pcmBytes } from "./helpers/audio";
+import { buildWav, pcmBytes } from "./helpers/audio";
+import { waitFor } from "./helpers/mock-server";
 
 const KEY = "bwa_key_test";
 
@@ -76,11 +79,8 @@ class MockTranscriptionsServer {
 const SUBMISSION = { id: "job-1", status: "queued" };
 const result = {
   request_id: "req-job",
-  text: "",
-  words: [],
-  segments: [],
   audio_duration_seconds: 0.5,
-  model_info: { name: "bw-streaming-en", version: "current" },
+  model_info: { name: "bw-listen-en", version: "current" },
   channels: [
     {
       channel: 0,
@@ -161,6 +161,17 @@ describe("transcriptions.submit", () => {
     expect(request.headers["x-callback-auth-value"]).toBe("callback-secret");
   });
 
+  it("uploads WAV bytes as audio/wav without raw-only parameters", async () => {
+    server.responses = [{ status: 202, body: SUBMISSION }];
+    const wav = buildWav({ sampleRate: 8000, channels: 2, samplesPerChannel: 400 });
+    await client().transcriptions.submit({ audio: wav, raw: false });
+    const request = server.requests[0]!;
+    expect(request.headers["content-type"]).toBe("audio/wav");
+    expect(new Uint8Array(request.body)).toEqual(wav);
+    expect(request.url.searchParams.get("encoding")).toBeNull();
+    expect(request.url.searchParams.get("sample_rate")).toBeNull();
+  });
+
   it("submits an audio URL as JSON and preserves explicit media options", async () => {
     server.responses = [{ status: 202, body: SUBMISSION }];
     await client().transcriptions.submit({
@@ -190,6 +201,16 @@ describe("transcriptions.submit", () => {
     expect(request.url.searchParams.get("callback_auth_header_value")).toBeNull();
     expect(request.headers["x-callback-auth-name"]).toBeUndefined();
     expect(request.headers["x-callback-auth-value"]).toBeUndefined();
+  });
+
+  it("lets the server infer channels for multichannel URL jobs", async () => {
+    server.responses = [{ status: 202, body: SUBMISSION }];
+    await client().transcriptions.submit({
+      audioUrl: "https://media.example.test/call.wav",
+      multichannel: true,
+    });
+    expect(server.requests[0]!.url.searchParams.get("multichannel")).toBe("true");
+    expect(server.requests[0]!.url.searchParams.get("channels")).toBeNull();
   });
 });
 
@@ -223,6 +244,28 @@ describe("transcriptions lifecycle", () => {
     expect(server.requests).toHaveLength(2);
   });
 
+  it("aborts while waiting between status polls", async () => {
+    server.responses = [{ status: 200, body: status("queued") }];
+    const controller = new AbortController();
+    const pending = client().transcriptions.wait("job-1", {
+      pollIntervalMs: 1000,
+      timeoutMs: 5000,
+      signal: controller.signal,
+    });
+    await waitFor(() => server.requests.length === 1);
+    const started = Date.now();
+    controller.abort(new Error("poll cancelled"));
+    await expect(pending).rejects.toThrow("poll cancelled");
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it("uses TranscriptionTimeoutError when the wait deadline expires", async () => {
+    server.responses = [{ status: 200, body: status("queued") }];
+    await expect(
+      client().transcriptions.wait("job-1", { pollIntervalMs: 1000, timeoutMs: 10 }),
+    ).rejects.toBeInstanceOf(TranscriptionTimeoutError);
+  });
+
   it("maps unknown jobs and platform limits to distinct typed errors", async () => {
     server.responses = [{ status: 404, body: { code: "not_found", message: KEY } }];
     await expect(client().transcriptions.get("foreign")).rejects.toBeInstanceOf(TranscriptionNotFoundError);
@@ -241,6 +284,11 @@ describe("transcriptions lifecycle", () => {
     expect((busy as JobLimitError).code).toBe("job_submission_busy");
     expect((busy as JobLimitError).retryAfterSeconds).toBe(5);
     expect((busy as Error).message).not.toContain(KEY);
+  });
+
+  it("maps an unexpected successful status to ProtocolError", async () => {
+    server.responses = [{ status: 200, body: SUBMISSION }];
+    await expect(client().transcriptions.submit({ audio: pcmBytes(3200) })).rejects.toBeInstanceOf(ProtocolError);
   });
 });
 

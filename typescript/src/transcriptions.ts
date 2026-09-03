@@ -8,6 +8,7 @@ import {
   ServiceUnavailableError,
   TranscriptionJobError,
   TranscriptionNotFoundError,
+  TranscriptionTimeoutError,
 } from "./errors";
 import { toUint8Array } from "./framing";
 import {
@@ -76,11 +77,12 @@ export interface TranscriptionGetOptions {
 }
 
 export interface TranscriptionWaitOptions extends TranscriptionGetOptions {
+  /** Delay between status requests; defaults to 2000 ms. */
   pollIntervalMs?: number;
 }
 
 const DEFAULT_JOB_TIMEOUT_MS = 120_000;
-const DEFAULT_WAIT_TIMEOUT_MS = 300_000;
+const DEFAULT_WAIT_TIMEOUT_MS = 600_000;
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 
 function checkTimeout(timeoutMs: number, name: string): void {
@@ -182,14 +184,19 @@ function buildTranscriptionsUrl(baseUrl: string, query: URLSearchParams): string
 }
 
 function buildJobQuery(options: TranscriptionJobOptions, rawInput: boolean, urlSource: boolean): URLSearchParams {
-  const media = resolveTranscribeMediaOptions(options);
+  const mediaOptions =
+    !rawInput && options.multichannel && options.channels === undefined
+      ? { ...options, channels: 2 }
+      : options;
+  const media = resolveTranscribeMediaOptions(mediaOptions);
   const query = new URLSearchParams();
   appendTranscribeQuery(query, media, options, rawInput);
   if (urlSource && !rawInput) {
-    if (options.channels === undefined && !media.multichannel) query.delete("channels");
+    if (options.channels === undefined) query.delete("channels");
     if (options.encoding !== undefined) query.set("encoding", options.encoding);
     if (options.sampleRate !== undefined) query.set("sample_rate", String(options.sampleRate));
   }
+  if (!urlSource && !rawInput && options.channels === undefined) query.delete("channels");
   if (!urlSource && options.callbackUrl !== undefined) query.append(CALLBACK_URL_PARAM, options.callbackUrl);
   return query;
 }
@@ -238,6 +245,26 @@ function composeSignals(timeout: AbortSignal, caller: AbortSignal | undefined): 
   return controller.signal;
 }
 
+function sleepWithSignal(delayMs: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return new Promise((resolve) => setTimeout(resolve, delayMs));
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      cleanup();
+      reject(signal.reason);
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 interface JobRequest {
   readonly url: string;
   readonly apiKey: string;
@@ -269,6 +296,9 @@ async function mapJobFailure(response: Response, apiKey: string, operation: stri
   const detail = message === undefined ? code : message;
   const suffix = detail === undefined ? "" : `: ${safeText(detail, apiKey)}`;
   const status = response.status;
+  if (status >= 200 && status < 300) {
+    return new ProtocolError(`${operation} returned unexpected HTTP ${status}`);
+  }
   if (status === 401 || status === 403) {
     return new AuthenticationError(`the API key was rejected (HTTP ${status})`, status);
   }
@@ -413,7 +443,9 @@ export class TranscriptionsClient {
     const deadline = Date.now() + timeoutMs;
     while (true) {
       const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new ServiceUnavailableError(`transcription job wait timed out after ${timeoutMs} ms`);
+      if (remaining <= 0) {
+        throw new TranscriptionTimeoutError(`transcription job wait timed out after ${timeoutMs} ms`);
+      }
       const job = await this.getWithKey(id, apiKey, Math.min(DEFAULT_JOB_TIMEOUT_MS, remaining), options.signal);
       if (job.status === "completed") {
         if (job.result === undefined) throw new ProtocolError("completed transcription job has no result");
@@ -425,12 +457,10 @@ export class TranscriptionsClient {
       }
       const remainingAfter = deadline - Date.now();
       if (remainingAfter <= 0) {
-        throw new ServiceUnavailableError(`transcription job wait timed out after ${timeoutMs} ms`);
+        throw new TranscriptionTimeoutError(`transcription job wait timed out after ${timeoutMs} ms`);
       }
       if (pollIntervalMs > 0) {
-        await new Promise<void>((resolve) =>
-          setTimeout(resolve, Math.min(pollIntervalMs, remainingAfter)),
-        );
+        await sleepWithSignal(Math.min(pollIntervalMs, remainingAfter), options.signal);
       }
     }
   }

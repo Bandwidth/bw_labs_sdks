@@ -41,7 +41,7 @@ const OK_BODY = JSON.stringify({
   ],
   segments: [{ start: 0.0, end: 0.5, text: "i need a dry van" }],
   audio_duration_seconds: 0.5,
-  model_info: { name: "bw-streaming-en", version: "current" },
+  model_info: { name: "bw-listen-en", version: "current" },
   pii_entities: [{ type: "ssn", start: 0.1, end: 0.2 }],
 });
 
@@ -151,7 +151,7 @@ describe("transcribe", () => {
     expect(result.words).toHaveLength(2);
     expect(result.segments).toEqual([{ start: 0.0, end: 0.5, text: "i need a dry van" }]);
     expect(result.audioDurationSeconds).toBe(0.5);
-    expect(result.modelInfo).toEqual({ name: "bw-streaming-en", version: "current" });
+    expect(result.modelInfo).toEqual({ name: "bw-listen-en", version: "current" });
     expect(result.redactedEntities).toBeUndefined();
     expect(result.raw.pii_entities).toEqual([{ type: "ssn", start: 0.1, end: 0.2 }]);
   });
@@ -288,7 +288,7 @@ describe("transcribeFile", () => {
         words: [],
         segments: [{ start: 0.0, end: 0.2, text: "wav transcript" }],
         audio_duration_seconds: 0.2,
-        model_info: { name: "bw-streaming-en", version: "current" },
+        model_info: { name: "bw-listen-en", version: "current" },
       }),
     };
     const result = await client().transcribe(pcmBytes(2));

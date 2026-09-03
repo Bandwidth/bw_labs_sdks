@@ -115,16 +115,18 @@ A successful response has this shape:
     {"start": 0.00, "end": 0.72, "text": "i need a dry van"}
   ],
   "audio_duration_seconds": 0.72,
-  "model_info": {"name": "bw-streaming-en", "version": "current"}
+  "model_info": {"name": "bw-listen-en", "version": "current"}
 }
 ```
 
 `words` is a timestamped word list and may be empty. `segments` is a typed
 list with `start`, `end`, and `text` fields.
 
-For stereo audio, pass `channels: 2` and `multichannel: true` to transcribe
-each channel independently. The single-channel result keeps the same shape
-when `multichannel` is omitted:
+For raw audio, pass `channels: 2` explicitly with `multichannel: true` because
+the client cannot infer the channel count. WAV uploads and URL submissions let
+the server infer the channel count. A stereo recording with `multichannel:
+true` returns an independent typed result for each channel. The single-channel
+result keeps the same shape when `multichannel` is omitted:
 
 ```ts
 const stereo = await client.transcribe(rawLinear16, {
@@ -138,7 +140,8 @@ for (const channel of stereo.channels ?? []) console.log(channel.channel, channe
 
 Use the `transcriptions` namespace for recordings that should be processed as
 jobs. Byte uploads use raw linear16 by default. Set `raw: false` when the bytes
-are a complete WAV container. URL submissions send the location in JSON:
+are a complete WAV container, which is sent as `audio/wav` without raw-only
+format parameters. URL submissions send the location in JSON:
 
 ```ts
 const job = await client.transcriptions.submit({ audio: rawLinear16 });
@@ -154,14 +157,19 @@ const urlJob = await client.transcriptions.submit({
 console.log(urlJob.status);
 ```
 
-Pass `channels: 2, multichannel: true` for independent stereo results.
+For raw stereo jobs, pass `channels: 2, multichannel: true` explicitly. WAV and
+URL jobs let the server infer the channel count. Pass `channels: 2,
+multichannel: true` when the client should include the stereo declaration.
 For upload callbacks, `callbackUrl` is a query parameter and
 `callbackAuthHeaderName` and `callbackAuthHeaderValue` travel in the
 `X-Callback-Auth-Name` and `X-Callback-Auth-Value` request headers. URL
 submissions put all three callback options in the JSON `callback` object. The
-SDK never sends callback credentials in the query. The namespace also provides
-`get(id)` and `delete(id)`. The service applies one 512 MiB upload limit to both
-direct uploads and audio downloaded from a URL.
+SDK never sends callback credentials in the query. `wait(id)` defaults to a
+600 second overall timeout and polls every 2 seconds. Pass `timeoutMs` and
+`pollIntervalMs` to change them, and use `signal` to cancel a wait while it is
+polling. A wait timeout throws `TranscriptionTimeoutError`. The namespace also
+provides `get(id)` and `delete(id)`. Uploads are fully buffered in memory, up
+to 512 MiB, including audio downloaded from a URL.
 
 ## Streaming audio
 
@@ -272,7 +280,7 @@ const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul
 
 ## Error handling
 
-Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and timeouts. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
+Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and request timeouts. `TranscriptionTimeoutError` represents an expired asynchronous job `wait()` deadline. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
 
 Job requests use `JobLimitError` for `job_limit_reached` and
 `job_submission_busy`; both expose `retryAfterSeconds` when the server sends

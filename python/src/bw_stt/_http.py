@@ -284,9 +284,7 @@ def _request(
     except urllib.error.URLError as exc:
         reason = _safe_job_text(str(exc.reason), api_key)
         if isinstance(exc.reason, TimeoutError):
-            raise ServiceUnavailableError(
-                f"{operation} timed out after {timeout:g}s"
-            ) from exc
+            raise ServiceUnavailableError(f"{operation} timed out after {timeout:g}s") from exc
         raise ServiceUnavailableError(f"{operation} failed: {reason}") from exc
     except TimeoutError as exc:
         raise ServiceUnavailableError(f"{operation} timed out after {timeout:g}s") from exc

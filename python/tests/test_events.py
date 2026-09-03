@@ -224,7 +224,7 @@ def test_parse_transcription() -> None:
                 "end": 0.4,
             }
         ],
-        "model_info": {"name": "bw-streaming-en", "version": "current"},
+        "model_info": {"name": "bw-listen-en", "version": "current"},
     }
     result = parse_transcription(json.dumps(payload))
     assert result.text == "hello"
@@ -233,7 +233,7 @@ def test_parse_transcription() -> None:
     assert result.segments[0].start == 0.0
     assert result.segments[0].end == 0.4
     assert result.audio_duration_seconds == 0.5
-    assert result.model_info == {"name": "bw-streaming-en", "version": "current"}
+    assert result.model_info == {"name": "bw-listen-en", "version": "current"}
     assert result.redacted_entities == (
         RedactedEntity(
             token="hash:v1:9f2c41d08ab37e15",
@@ -255,7 +255,7 @@ def test_parse_transcription_allows_empty_words() -> None:
                 "words": [],
                 "segments": [{"start": 0.0, "end": 0.4, "text": "hello"}],
                 "audio_duration_seconds": 0.5,
-                "model_info": {"name": "bw-streaming-en", "version": "current"},
+                "model_info": {"name": "bw-listen-en", "version": "current"},
             }
         )
     )

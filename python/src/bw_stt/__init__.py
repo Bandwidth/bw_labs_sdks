@@ -7,14 +7,13 @@ from .errors import (
     ConnectionClosedError,
     InvalidRequestError,
     JobLimitError,
-    JobLimitReachedError,
     JobPlatformUnavailableError,
-    NotFoundError,
     ProtocolError,
     RateLimitError,
     ServiceUnavailableError,
     TranscriptionJobError,
     TranscriptionNotFoundError,
+    TranscriptionTimeoutError,
 )
 from .events import (
     ErrorEvent,
@@ -42,7 +41,7 @@ from .sync import BwSttClient, Session
 from .transcript import DisplayWord, TranscriptAssembler, WordAssembler
 from .transcriptions import AsyncTranscriptionsClient, TranscriptionsClient
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AsyncBwSttClient",
@@ -58,10 +57,8 @@ __all__ = [
     "InvalidRequestError",
     "JobErrorDetail",
     "JobLimitError",
-    "JobLimitReachedError",
     "JobPlatformUnavailableError",
     "JobStatus",
-    "NotFoundError",
     "ProtocolError",
     "RateLimitError",
     "RedactedEntity",
@@ -81,6 +78,7 @@ __all__ = [
     "TranscriptionJobSubmission",
     "TranscriptionNotFoundError",
     "TranscriptionSegment",
+    "TranscriptionTimeoutError",
     "TranscriptionsClient",
     "UnknownEvent",
     "Word",

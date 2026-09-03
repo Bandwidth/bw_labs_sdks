@@ -15,6 +15,7 @@ from bw_stt import (
     JobPlatformUnavailableError,
     TranscriptionJobError,
     TranscriptionNotFoundError,
+    TranscriptionTimeoutError,
 )
 
 from .conftest import JobServerFactory, write_wav
@@ -112,6 +113,18 @@ def test_submit_url_sends_json_and_options(
     assert request.headers["x-bw-labs-api-key"] == api_key_env
 
 
+def test_submit_url_allows_server_to_infer_multichannel_audio(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server([HttpScript(status=202, body=_submission())])
+    BwSttClient(base_url=server.base_url).transcriptions.submit_url(
+        "https://media.example.test/call.wav", multichannel=True
+    )
+    query = dict(parse_qsl(urlsplit(server.requests[0].path or "").query))
+    assert query["multichannel"] == "true"
+    assert "channels" not in query
+
+
 def test_submit_path_uploads_wav_container(
     mock_transcriptions_server: JobServerFactory, api_key_env: str, tmp_path: Path
 ) -> None:
@@ -141,14 +154,45 @@ def test_submit_binary_wav_file_object(
     assert request.body == path.read_bytes()
 
 
+def test_submit_wav_bytes_sniffs_container(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str, tmp_path: Path
+) -> None:
+    path = tmp_path / "bytes.wav"
+    write_wav(path, seconds=0.1, sample_rate=8000, channels=2)
+    wav_bytes = path.read_bytes()
+    server = mock_transcriptions_server([HttpScript(status=202, body=_submission())])
+    BwSttClient(base_url=server.base_url).transcriptions.submit(wav_bytes, raw=False)
+    request = server.requests[0]
+    assert request.headers["content-type"] == "audio/wav"
+    assert request.body == wav_bytes
+    query = dict(parse_qsl(urlsplit(request.path or "").query))
+    assert "encoding" not in query
+    assert "sample_rate" not in query
+    assert query["channels"] == "2"
+
+
+def test_submit_path_raw_true_sends_bytes_as_raw(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str, tmp_path: Path
+) -> None:
+    path = tmp_path / "raw.wav"
+    write_wav(path, seconds=0.1, sample_rate=8000)
+    server = mock_transcriptions_server([HttpScript(status=202, body=_submission())])
+    BwSttClient(base_url=server.base_url).transcriptions.submit(path, raw=True, sample_rate=8000)
+    request = server.requests[0]
+    assert request.headers["content-type"] == "application/octet-stream"
+    assert request.body == path.read_bytes()
+    query = dict(parse_qsl(urlsplit(request.path or "").query))
+    assert query["encoding"] == "linear16"
+    assert query["sample_rate"] == "8000"
+
+
 def test_transcribe_multichannel_query_and_typed_channels(
     mock_http_server, api_key_env: str
 ) -> None:
     result = {
-        **DEFAULT_TRANSCRIPTION,
-        "text": "",
-        "words": [],
-        "segments": [],
+        "request_id": DEFAULT_TRANSCRIPTION["request_id"],
+        "audio_duration_seconds": DEFAULT_TRANSCRIPTION["audio_duration_seconds"],
+        "model_info": DEFAULT_TRANSCRIPTION["model_info"],
         "channels": [
             {"channel": 0, "text": "left", "words": [], "segments": []},
             {"channel": 1, "text": "right", "words": [], "segments": []},
@@ -185,10 +229,9 @@ def test_wait_success_and_multichannel_parse(
     mock_transcriptions_server: JobServerFactory, api_key_env: str
 ) -> None:
     result = {
-        **DEFAULT_TRANSCRIPTION,
-        "text": "",
-        "words": [],
-        "segments": [],
+        "request_id": DEFAULT_TRANSCRIPTION["request_id"],
+        "audio_duration_seconds": DEFAULT_TRANSCRIPTION["audio_duration_seconds"],
+        "model_info": DEFAULT_TRANSCRIPTION["model_info"],
         "channels": [
             {
                 "channel": 0,
@@ -216,6 +259,17 @@ def test_wait_success_and_multichannel_parse(
     assert transcription.channels is not None
     assert [channel.text for channel in transcription.channels] == ["left", "right"]
     assert [request.method for request in server.requests] == ["GET", "GET"]
+
+
+def test_wait_timeout_uses_typed_error(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server([HttpScript(status=200, body=_status("queued"))])
+    with pytest.raises(TranscriptionTimeoutError) as excinfo:
+        BwSttClient(base_url=server.base_url).transcriptions.wait(
+            "job-1", poll_interval=2, timeout=0.01
+        )
+    assert isinstance(excinfo.value, TimeoutError)
 
 
 def test_wait_error_includes_code_without_api_key(
@@ -308,3 +362,18 @@ def test_async_transcriptions_wait(
         return result.text
 
     assert asyncio.run(run()) == "i need a dry van"
+
+
+def test_async_transcriptions_wait_timeout_uses_typed_error(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server([HttpScript(status=200, body=_status("queued"))])
+
+    async def run() -> None:
+        with pytest.raises(TranscriptionTimeoutError) as excinfo:
+            await AsyncBwSttClient(base_url=server.base_url).transcriptions.wait(
+                "job-1", poll_interval=2, timeout=0.01
+            )
+        assert isinstance(excinfo.value, TimeoutError)
+
+    asyncio.run(run())

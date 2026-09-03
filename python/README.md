@@ -129,16 +129,18 @@ A successful response has this shape:
     {"start": 0.00, "end": 0.72, "text": "i need a dry van"}
   ],
   "audio_duration_seconds": 0.72,
-  "model_info": {"name": "bw-streaming-en", "version": "current"}
+  "model_info": {"name": "bw-listen-en", "version": "current"}
 }
 ```
 
 `words` is a timestamped word list and may be empty. `segments` always carries
 the typed segment list with `start`, `end`, and `text`.
 
-For a stereo recording, set `channels=2` and `multichannel=True` to receive an
-independent typed result for each channel. The single-channel response shape
-does not change when this option is omitted:
+For raw audio, set `channels=2` explicitly with `multichannel=True` because the
+client cannot infer the channel count. WAV uploads and URL submissions let the
+server infer the channel count. A stereo recording with `multichannel=True`
+returns an independent typed result for each channel. The single-channel
+response shape does not change when this option is omitted:
 
 ```python
 result = client.transcribe("stereo.wav", channels=2, multichannel=True)
@@ -150,8 +152,12 @@ for channel in result.channels or ():
 
 Use `client.transcriptions` when a recording should be processed as a job.
 Uploads accept bytes, a WAV path, or a binary file object. URL submissions send
-the audio location in JSON. `wait()` polls until the job has a completed typed
-result or raises `TranscriptionJobError` with the service error code:
+the audio location in JSON. For `submit()`, `raw=False` treats bytes and binary
+file objects beginning with a RIFF/WAVE header as WAV and takes their sample
+rate and channel count from that header. Other bytes are treated as raw
+linear16, and `raw=True` always forces raw treatment. `wait()` polls until the
+job has a completed typed result or raises `TranscriptionJobError` with the
+service error code:
 
 ```python
 job = client.transcriptions.submit("call.wav")
@@ -167,13 +173,17 @@ url_job = client.transcriptions.submit_url(
 print(url_job.id)
 ```
 
-For stereo jobs, pass `channels=2, multichannel=True`. Upload callbacks keep
+For raw stereo jobs, pass `channels=2, multichannel=True` explicitly. WAV and
+URL jobs let the server infer the channel count. Upload callbacks keep
 `callback_url` in the query and send the credential metadata in the
 `X-Callback-Auth-Name` and `X-Callback-Auth-Value` request headers. URL
 submissions put the URL and credential metadata in the JSON `callback` object.
-The SDK never sends callback credentials in the query. The async client exposes
-the same operations through `await client.transcriptions`. The service applies
-one 512 MiB upload limit to both direct uploads and audio downloaded from a URL.
+The SDK never sends callback credentials in the query. `wait()` defaults to a
+600 second overall timeout and polls every 2 seconds; pass `timeout` and
+`poll_interval` to change them. A timeout raises `TranscriptionTimeoutError`,
+which is also a built-in `TimeoutError`. The async client exposes the same
+operations through `await client.transcriptions`. Uploads are fully buffered in
+memory, up to 512 MiB, including audio downloaded from a URL.
 
 ## Live word display
 
@@ -284,6 +294,7 @@ Job requests additionally use `JobLimitError` for `job_limit_reached` and
 `job_submission_busy`; both expose the server's `retry_after` value when
 present. `JobPlatformUnavailableError` represents `job_platform_unavailable`,
 and `TranscriptionNotFoundError` represents an unknown or inaccessible job id.
+`TranscriptionTimeoutError` represents an expired `wait()` deadline.
 
 ```python
 from bw_stt import ConnectionClosedError, ErrorEvent, RateLimitError
@@ -317,10 +328,11 @@ reported by `SessionClosed.delivery_failed`.
 
 `base_url` accepts `ws`, `wss`, `http`, or `https` URLs; `http(s)` is
 normalized to `ws(s)` for streaming and `ws(s)` to `http(s)` for
-`transcribe()`. A base URL without a path gets the standard paths appended
-(`/audio/v1/listen`, `/audio/v1/transcribe`, and `/audio/v1/transcriptions`); a custom path is used
-verbatim for streaming, with `/transcribe` substituted for a trailing
-`/listen` (or appended) for `transcribe()` and job requests:
+`transcribe()` and job requests. A base URL without a path gets the standard
+paths appended (`/audio/v1/listen`, `/audio/v1/transcribe`, and
+`/audio/v1/transcriptions`). A custom path is used verbatim for streaming;
+`transcribe()` derives `/transcribe`, while job requests derive
+`/transcriptions`.
 
 ```python
 client = BwSttClient(base_url="wss://gateway.example.com")

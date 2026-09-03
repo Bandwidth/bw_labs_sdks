@@ -46,6 +46,11 @@ export class ServiceUnavailableError extends BwSttError {
   override name = "ServiceUnavailableError";
 }
 
+/** Waiting for an asynchronous transcription job exceeded its deadline. */
+export class TranscriptionTimeoutError extends BwSttError {
+  override name = "TranscriptionTimeoutError";
+}
+
 /** A per-key or per-instance asynchronous transcription limit was reached (HTTP 429). */
 export class JobLimitError extends RateLimitError {
   override name = "JobLimitError";
@@ -56,8 +61,6 @@ export class JobLimitError extends RateLimitError {
     this.code = code;
   }
 }
-
-export { JobLimitError as JobLimitReachedError };
 
 /** The asynchronous transcription job platform is unavailable (HTTP 503). */
 export class JobPlatformUnavailableError extends ServiceUnavailableError {
@@ -71,8 +74,6 @@ export class TranscriptionNotFoundError extends BwSttError {
   readonly code = "not_found";
   readonly status = 404;
 }
-
-export { TranscriptionNotFoundError as NotFoundError };
 
 /** A transcription job reached the terminal error state. */
 export class TranscriptionJobError extends BwSttError {
