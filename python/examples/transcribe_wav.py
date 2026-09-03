@@ -16,8 +16,12 @@ import sys
 from bw_stt import BwSttClient, TranscriptAssembler, WordAssembler
 
 
+_LIVE_WINDOW = 12
+
+
 def render(words: WordAssembler) -> None:
-    print("\r" + " ".join(word.text for word in words.words), end="", flush=True)
+    tail = words.words[-_LIVE_WINDOW:]
+    print("\r" + " ".join(w.text for w in tail), end="", flush=True)
 
 
 def main() -> int:
