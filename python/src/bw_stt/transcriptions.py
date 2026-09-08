@@ -25,6 +25,7 @@ from ._wire import (
 )
 from .errors import (
     ProtocolError,
+    ServiceUnavailableError,
     TranscriptionJobError,
     TranscriptionTimeoutError,
 )
@@ -45,6 +46,10 @@ _DEFAULT_WAIT_TIMEOUT = 600.0
 def _check_timeout(timeout: float, name: str = "timeout") -> None:
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError(f"{name} must be positive")
+
+
+def _wait_timeout_error(timeout: float) -> TranscriptionTimeoutError:
+    return TranscriptionTimeoutError(f"transcription job wait timed out after {timeout:g}s")
 
 
 def _read_file_audio(audio: BinaryIO) -> bytes:
@@ -150,7 +155,7 @@ def _prepare_upload(
     callback_auth_header_value: str | None,
 ) -> tuple[bytes, str, list[tuple[str, str]], dict[str, str]]:
     raw_input = True
-    if isinstance(audio, (str, Path)):
+    if isinstance(audio, str | Path):
         data = Path(audio).read_bytes()
         if not raw:
             sample_rate, channels = _wav_parameters(
@@ -420,18 +425,19 @@ class TranscriptionsClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TranscriptionTimeoutError(
-                    f"transcription job wait timed out after {timeout:g}s"
-                )
-            job = self.get(id, timeout=min(_DEFAULT_JOB_TIMEOUT, remaining))
+                raise _wait_timeout_error(timeout)
+            try:
+                job = self.get(id, timeout=min(_DEFAULT_JOB_TIMEOUT, remaining))
+            except (ServiceUnavailableError, TimeoutError) as exc:
+                if time.monotonic() >= deadline:
+                    raise _wait_timeout_error(timeout) from exc
+                raise
             result = _terminal_result(job, api_key)
             if result is not None:
                 return result
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TranscriptionTimeoutError(
-                    f"transcription job wait timed out after {timeout:g}s"
-                )
+                raise _wait_timeout_error(timeout)
             time.sleep(min(poll_interval, remaining))
 
     def delete(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> None:
@@ -540,18 +546,19 @@ class AsyncTranscriptionsClient:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TranscriptionTimeoutError(
-                    f"transcription job wait timed out after {timeout:g}s"
-                )
-            job = await self.get(id, timeout=min(_DEFAULT_JOB_TIMEOUT, remaining))
+                raise _wait_timeout_error(timeout)
+            try:
+                job = await self.get(id, timeout=min(_DEFAULT_JOB_TIMEOUT, remaining))
+            except (ServiceUnavailableError, TimeoutError) as exc:
+                if time.monotonic() >= deadline:
+                    raise _wait_timeout_error(timeout) from exc
+                raise
             result = _terminal_result(job, api_key)
             if result is not None:
                 return result
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TranscriptionTimeoutError(
-                    f"transcription job wait timed out after {timeout:g}s"
-                )
+                raise _wait_timeout_error(timeout)
             await asyncio.sleep(min(poll_interval, remaining))
 
     async def delete(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> None:

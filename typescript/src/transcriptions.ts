@@ -446,7 +446,16 @@ export class TranscriptionsClient {
       if (remaining <= 0) {
         throw new TranscriptionTimeoutError(`transcription job wait timed out after ${timeoutMs} ms`);
       }
-      const job = await this.getWithKey(id, apiKey, Math.min(DEFAULT_JOB_TIMEOUT_MS, remaining), options.signal);
+      let job: TranscriptionJob;
+      try {
+        job = await this.getWithKey(id, apiKey, Math.min(DEFAULT_JOB_TIMEOUT_MS, remaining), options.signal);
+      } catch (error) {
+        if (options.signal?.aborted) throw options.signal.reason ?? error;
+        if (Date.now() >= deadline && error instanceof ServiceUnavailableError) {
+          throw new TranscriptionTimeoutError(`transcription job wait timed out after ${timeoutMs} ms`);
+        }
+        throw error;
+      }
       if (job.status === "completed") {
         if (job.result === undefined) throw new ProtocolError("completed transcription job has no result");
         return job.result;

@@ -272,6 +272,33 @@ def test_wait_timeout_uses_typed_error(
     assert isinstance(excinfo.value, TimeoutError)
 
 
+def test_wait_delayed_final_poll_uses_typed_timeout(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server([HttpScript(status=200, body=_status("queued"), delay=0.2)])
+    with pytest.raises(TranscriptionTimeoutError):
+        BwSttClient(base_url=server.base_url).transcriptions.wait(
+            "job-1", poll_interval=0, timeout=0.05
+        )
+
+
+def test_wait_propagates_upstream_error_before_deadline(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server(
+        [
+            HttpScript(
+                status=503,
+                body={"code": "job_platform_unavailable", "message": "try later"},
+            )
+        ]
+    )
+    with pytest.raises(JobPlatformUnavailableError):
+        BwSttClient(base_url=server.base_url).transcriptions.wait(
+            "job-1", poll_interval=0, timeout=1
+        )
+
+
 def test_wait_error_includes_code_without_api_key(
     mock_transcriptions_server: JobServerFactory, api_key_env: str
 ) -> None:
@@ -375,5 +402,19 @@ def test_async_transcriptions_wait_timeout_uses_typed_error(
                 "job-1", poll_interval=2, timeout=0.01
             )
         assert isinstance(excinfo.value, TimeoutError)
+
+    asyncio.run(run())
+
+
+def test_async_transcriptions_wait_delayed_final_poll_uses_typed_timeout(
+    mock_transcriptions_server: JobServerFactory, api_key_env: str
+) -> None:
+    server = mock_transcriptions_server([HttpScript(status=200, body=_status("queued"), delay=0.2)])
+
+    async def run() -> None:
+        with pytest.raises(TranscriptionTimeoutError):
+            await AsyncBwSttClient(base_url=server.base_url).transcriptions.wait(
+                "job-1", poll_interval=0, timeout=0.05
+            )
 
     asyncio.run(run())

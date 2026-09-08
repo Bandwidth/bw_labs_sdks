@@ -26,6 +26,7 @@ interface ResponseScript {
   readonly status: number;
   readonly headers?: Record<string, string>;
   readonly body?: unknown;
+  readonly delayMs?: number;
 }
 
 class MockTranscriptionsServer {
@@ -53,12 +54,16 @@ class MockTranscriptionsServer {
             body: Buffer.concat(chunks),
           });
           const script = instance.responses.shift() ?? { status: 200, body: {} };
-          response.writeHead(script.status, {
-            ...(script.headers ?? {}),
-            ...(script.status === 204 ? {} : { "content-type": "application/json" }),
-          });
-          if (script.status === 204) response.end();
-          else response.end(typeof script.body === "string" ? script.body : JSON.stringify(script.body ?? {}));
+          const sendResponse = () => {
+            response.writeHead(script.status, {
+              ...(script.headers ?? {}),
+              ...(script.status === 204 ? {} : { "content-type": "application/json" }),
+            });
+            if (script.status === 204) response.end();
+            else response.end(typeof script.body === "string" ? script.body : JSON.stringify(script.body ?? {}));
+          };
+          if ((script.delayMs ?? 0) > 0) setTimeout(sendResponse, script.delayMs);
+          else sendResponse();
         });
       });
       server.listen(0, "127.0.0.1", () => {
@@ -264,6 +269,22 @@ describe("transcriptions lifecycle", () => {
     await expect(
       client().transcriptions.wait("job-1", { pollIntervalMs: 1000, timeoutMs: 10 }),
     ).rejects.toBeInstanceOf(TranscriptionTimeoutError);
+  });
+
+  it("uses TranscriptionTimeoutError when the final poll response misses the wait deadline", async () => {
+    server.responses = [{ status: 200, body: status("queued"), delayMs: 200 }];
+    await expect(
+      client().transcriptions.wait("job-1", { pollIntervalMs: 0, timeoutMs: 20 }),
+    ).rejects.toBeInstanceOf(TranscriptionTimeoutError);
+  });
+
+  it("propagates an upstream error that arrives before the wait deadline", async () => {
+    server.responses = [
+      { status: 503, body: { code: "job_platform_unavailable", message: "try later" } },
+    ];
+    await expect(
+      client().transcriptions.wait("job-1", { pollIntervalMs: 0, timeoutMs: 1000 }),
+    ).rejects.toBeInstanceOf(JobPlatformUnavailableError);
   });
 
   it("maps unknown jobs and platform limits to distinct typed errors", async () => {

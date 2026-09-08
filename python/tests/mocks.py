@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -218,6 +219,7 @@ class HttpScript:
     body: dict[str, Any] | None = None
     raw_body: bytes | None = None
     headers: dict[str, str] = field(default_factory=dict)
+    delay: float = 0.0
 
 
 @dataclass
@@ -305,6 +307,8 @@ class MockTranscriptionsServer:
                     payload = json.dumps(script.body).encode()
                 else:
                     payload = b""
+                if script.delay > 0:
+                    time.sleep(script.delay)
                 self.send_response(script.status)
                 for key, value in script.headers.items():
                     self.send_header(key, value)
