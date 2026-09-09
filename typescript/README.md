@@ -1,19 +1,18 @@
 # @bandwidth-labs/bw-stt
 
-TypeScript SDK for the Bandwidth Labs streaming speech-to-text API. Works in Node 18+ and in browsers.
+TypeScript SDK for the Bandwidth Labs streaming speech-to-text API. Requires Node >=22. Browser support is separate: use a modern browser with fetch, AbortController and WebSocket support. File-path APIs are Node-only.
 
 Full protocol details are in the [API reference](https://labs.bandwidth.com/docs/speech-to-text).
 
 ## Install
 
-During the beta, install from a clone of this repository. The package builds
-its dist on install via the prepare script.
+After 0.2.0 is published, install it from the package registry:
 
 ```sh
-git clone https://github.com/Bandwidth/bw_labs_sdks.git
-cd bw_labs_sdks/typescript && npm install && cd -
-npm install ./bw_labs_sdks/typescript
+npm install @bandwidth-labs/bw-stt@0.2.0
 ```
+
+For source setup, see [Contributing](https://github.com/Bandwidth/bw_labs_sdks/blob/main/CONTRIBUTING.md).
 
 ## Quickstart
 
@@ -171,6 +170,25 @@ polling. A wait timeout throws `TranscriptionTimeoutError`. The namespace also
 provides `get(id)` and `delete(id)`. Uploads are fully buffered in memory, up
 to 512 MiB, including audio downloaded from a URL.
 
+### Job lifecycle
+
+The per-key job limit returns `Retry-After: 30`; a busy submission returns
+`Retry-After: 5` (seconds). The SDK surfaces these errors without retrying.
+The service follows at most three redirects when fetching `audio_url`, with a
+60 s whole-download limit. Authenticated SDK API calls reject redirects.
+Uploads are limited to 512 MiB and job audio to 1800 s. These job limits are
+separate from the synchronous transcription endpoint's limits.
+
+Callbacks are delivered at least once. Retries occur no sooner than 30 s after
+a failure, with up to ten recorded failures. Deduplicate callbacks by job id.
+Completed status and callbacks describe the transcript only.
+
+The job record expires seven days after its last update. Each stored object
+expires seven days after it was written. DELETE removes the job record and
+stored audio/results. It does not remove separately retained captures or usage,
+and cancels an unfinished platform capture. Local timeout or cancellation does
+not delete an accepted server job; call delete explicitly when needed.
+
 ## Streaming audio
 
 `sendAudio` sends one binary frame per call and validates it: 20 to 1000 ms of complete interleaved samples. For Opus, send exactly one raw packet per call; the duration rule does not apply.
@@ -237,13 +255,13 @@ for (const transcript of transcripts) {
 }
 ```
 
-A demand `Transcript` includes a redaction summary:
+This synthetic demand `Transcript` uses an invalid SSN placeholder:
 
 ```json
 {
   "type": "Transcript",
   "channel": 0,
-  "text": "my number is [redacted]",
+  "text": "my number is hash:v1:9f2c41d08ab37e15",
   "words": [],
   "redaction": {
     "applied": true,
@@ -253,7 +271,7 @@ A demand `Transcript` includes a redaction summary:
     {
       "token": "hash:v1:9f2c41d08ab37e15",
       "kind": "pii",
-      "text": "123-45-6789",
+      "text": "000-00-0000",
       "start": 2.10,
       "end": 2.45
     }
@@ -326,3 +344,10 @@ rather than dropped.
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+
+
+
+Fetch rejects redirects with `ProtocolError` when the runtime identifies the
+redirect failure. Fetch does not expose the rejected redirect status. Browsers
+may report an indistinguishable network failure as `ServiceUnavailableError`.

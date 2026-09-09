@@ -15,6 +15,8 @@ from typing import Any, Literal
 
 from . import _http
 from ._framing import FrameChunker, iter_raw_chunks, iter_wav_chunks, validate_frame
+from ._transport import run_async
+from ._version import USER_AGENT
 from ._wire import (
     API_KEY_ENV,
     API_KEY_HEADER,
@@ -96,7 +98,11 @@ async def _open_websocket(url: str, api_key: str) -> Any:
     # websockets renamed the handshake-header argument in version 14
     for header_arg in ("additional_headers", "extra_headers"):
         # the caller's connect_timeout governs the whole open, not websockets' own
-        kwargs: dict[str, Any] = {header_arg: headers, "open_timeout": None}
+        kwargs: dict[str, Any] = {
+            header_arg: headers,
+            "open_timeout": None,
+            "user_agent_header": USER_AGENT,
+        }
         try:
             return await connect(url, **kwargs)
         except TypeError as exc:
@@ -105,6 +111,10 @@ async def _open_websocket(url: str, api_key: str) -> Any:
         except Exception as exc:
             mapped = _map_rejected_upgrade(exc)
             if mapped is None:
+                if isinstance(exc, OSError):
+                    raise ServiceUnavailableError("streaming connection failed") from OSError(
+                        type(exc).__name__
+                    )
                 raise
             raise mapped from exc
     raise BwSttError(f"unsupported websockets version: {signature_error}")
@@ -142,7 +152,7 @@ class AsyncBwSttClient:
         model: str | None = None,
         mode: Literal["instant", "demand"] | None = None,
         redact_pii: bool = False,
-        redact_pii_sub: str | None = None,
+        redact_pii_sub: Literal["entity_name", "hash"] | None = None,
         redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         keepalive_interval: float | None = 25.0,
@@ -206,7 +216,7 @@ class AsyncBwSttClient:
         multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
-        redact_pii_sub: str | None = None,
+        redact_pii_sub: Literal["entity_name", "hash"] | None = None,
         redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         raw: bool = False,
@@ -220,7 +230,7 @@ class AsyncBwSttClient:
         channels. Accepts up to five minutes of decoded audio.
         """
         api_key = _resolve_api_key(self.api_key)
-        return await asyncio.to_thread(
+        return await run_async(
             _http.transcribe,
             self.base_url,
             api_key,

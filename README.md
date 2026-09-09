@@ -9,7 +9,7 @@ Official client SDKs for Bandwidth Labs services.
 
 Both SDKs cover the Speech to Text API: streaming transcription over the
 `/audio/v1/listen` WebSocket in instant and demand modes, whole-file
-transcription over `POST /audio/v1/transcribe`, PII redaction, and keyword
+transcription over `POST /audio/v1/transcribe`, asynchronous jobs, multichannel results, PII redaction, and keyword
 boosting. Each package ships typed events, word-level timestamps, and
 transcript assembly utilities, with a runnable example under its `examples/`
 directory.
@@ -33,15 +33,20 @@ files:
 - **TypeScript:** Update `version` in `typescript/package.json` and keep
   `typescript/package-lock.json` synchronized.
 - **Python:** Update `version` in `python/pyproject.toml` and `__version__` in
-  `python/src/bw_stt/__init__.py` to the same new package version.
+  `python/src/bw_stt/_version.py` to the same new package version.
 
 Configure trusted publishing for each registry before running the workflow:
 
 - On npm, add a GitHub Actions trusted publisher for
   `@bandwidth-labs/bw-stt` using organization `Bandwidth`, repository
-  `bw_labs_sdks`, workflow `publish.yml`, and no environment. The workflow
+  `bw_labs_sdks`, workflow `publish.yml`, and environment `npm`. The workflow
   authenticates through GitHub OIDC and does not require an npm token.
 - On PyPI, add a GitHub Actions trusted publisher for `bw-stt` using owner
   `Bandwidth`, repository `bw_labs_sdks`, workflow `publish.yml`, and
   environment `pypi`. A pending publisher can be configured before the first
   release.
+
+The workflow tests and builds the selected package before publishing the same
+validated artifact. npm trusted publishing requires npm >=11.5.1 and
+Node >=22.14.0; the workflow uses Node 24. Configure registry authorization and
+protected environments before dispatching a release.

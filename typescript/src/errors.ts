@@ -1,6 +1,6 @@
 import type { ErrorEvent } from "./events";
 
-/** Base class for every error thrown by this SDK. */
+/** Base class for SDK protocol and service errors. Local validation errors and cancellation reasons may use other types. */
 export class BwSttError extends Error {
   override name = "BwSttError";
 }
@@ -125,9 +125,12 @@ export class ProtocolError extends BwSttError {
   override name = "ProtocolError";
   /** Set when the server rejected the session with an in-band Error event. */
   readonly errorEvent?: ErrorEvent;
+  /** HTTP status when the runtime exposes it. */
+  readonly status?: number;
 
-  constructor(message: string, options: { errorEvent?: ErrorEvent; cause?: unknown } = {}) {
+  constructor(message: string, options: { errorEvent?: ErrorEvent; cause?: unknown; status?: number } = {}) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     if (options.errorEvent !== undefined) this.errorEvent = options.errorEvent;
+    if (options.status !== undefined) this.status = options.status;
   }
 }

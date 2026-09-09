@@ -1,3 +1,4 @@
+import { redirectFailure, userAgentHeaders } from "./http";
 import {
   AuthenticationError,
   InvalidRequestError,
@@ -86,8 +87,10 @@ export async function requestTranscription(request: TranscribeRequest): Promise<
     let response: Response;
     try {
       response = await fetch(request.url, {
+        redirect: "error",
         method: "POST",
         headers: {
+          ...userAgentHeaders(),
           [API_KEY_HEADER]: request.apiKey,
           "Content-Type": request.contentType,
         },
@@ -97,6 +100,8 @@ export async function requestTranscription(request: TranscribeRequest): Promise<
     } catch (cause) {
       if (callerAborted()) throw request.signal?.reason ?? cause;
       if (timedOut) throw timeoutError();
+      const redirect = redirectFailure(cause);
+      if (redirect !== undefined) throw redirect;
       throw new ServiceUnavailableError("transcribe request failed", { cause });
     }
     if (!response.ok) {
@@ -118,6 +123,7 @@ export async function requestTranscription(request: TranscribeRequest): Promise<
 
 async function mapHttpFailure(response: Response, apiKey: string): Promise<Error> {
   const status = response.status;
+  if (status >= 300 && status < 400) return new ProtocolError(`API redirect rejected (HTTP ${status})`, { status });
   if (status === 401 || status === 403) {
     return new AuthenticationError(`the API key was rejected (HTTP ${status})`, status);
   }

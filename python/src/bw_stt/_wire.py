@@ -56,7 +56,7 @@ class SessionParams:
     model: str | None = None
     mode: Literal["instant", "demand"] | None = None
     redact_pii: bool = False
-    redact_pii_sub: str | None = None
+    redact_pii_sub: Literal["entity_name", "hash"] | None = None
     redact_pii_return: bool = False
     keywords: Sequence[str] | None = None
 

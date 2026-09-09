@@ -2,6 +2,13 @@
 
 ## 0.2.0
 
+- Reject authenticated API redirects without forwarding credentials or retrying.
+- Document job retention, callbacks, deletion, limits and local cancellation.
+- Add versioned HTTP User-Agent identification where supported.
+- Enforce whole-request deadlines and close HTTP transports on async cancellation.
+- Map streaming network failures to ServiceUnavailableError with sanitized causes.
+- Support websockets >=13,<16.
+
 - Added synchronous and asynchronous transcription jobs with `submit`,
   `submit_url`, `get`, `wait`, and `delete`.
 - Added typed multichannel transcription results that match the service's

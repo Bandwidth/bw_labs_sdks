@@ -9,8 +9,11 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Literal
 
 from ._framing import read_wav_file
+from ._transport import exchange
+from ._version import USER_AGENT
 from ._wire import (
     API_KEY_HEADER,
     TRANSCRIBE_MAX_AUDIO_DESCRIPTION,
@@ -46,7 +49,7 @@ def transcribe(
     multichannel: bool,
     model: str | None,
     redact_pii: bool,
-    redact_pii_sub: str | None,
+    redact_pii_sub: Literal["entity_name", "hash"] | None,
     redact_pii_return: bool,
     keywords: Sequence[str] | None,
     raw: bool,
@@ -105,11 +108,10 @@ def _post(url: str, api_key: str, data: bytes, content_type: str, timeout: float
         url,
         data=data,
         method="POST",
-        headers={API_KEY_HEADER: api_key, "Content-Type": content_type},
+        headers={API_KEY_HEADER: api_key, "Content-Type": content_type, "User-Agent": USER_AGENT},
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            body = response.read()
+        _, body = exchange(request, timeout)
     except urllib.error.HTTPError as exc:
         raise _map_http_error(exc, api_key) from exc
     except urllib.error.URLError as exc:
@@ -162,6 +164,8 @@ def _error_detail(exc: urllib.error.HTTPError, api_key: str = "") -> str:
 
 def _map_http_error(exc: urllib.error.HTTPError, api_key: str = "") -> BwSttError:
     status = exc.code
+    if 300 <= status < 400:
+        return ProtocolError(f"API redirect rejected (HTTP {status})", status=status)
     if status in (401, 403):
         return AuthenticationError(f"API key rejected (HTTP {status})")
     if status == 429:
@@ -219,6 +223,8 @@ def _job_detail(default: str, code: str | None, message: str | None, api_key: st
 
 def _map_job_http_error(exc: urllib.error.HTTPError, operation: str, api_key: str) -> BwSttError:
     status = exc.code
+    if 300 <= status < 400:
+        return ProtocolError(f"API redirect rejected (HTTP {status})", status=status)
     code, message = _job_error_payload(exc)
     if status in (401, 403):
         return AuthenticationError(f"API key rejected (HTTP {status})")
@@ -270,15 +276,14 @@ def _request(
     timeout: float,
     operation: str,
 ) -> tuple[int, bytes]:
-    headers = {API_KEY_HEADER: api_key}
+    headers = {API_KEY_HEADER: api_key, "User-Agent": USER_AGENT}
     if extra_headers is not None:
         headers.update(extra_headers)
     if content_type is not None:
         headers["Content-Type"] = content_type
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return int(response.status), response.read()
+        return exchange(request, timeout)
     except urllib.error.HTTPError as exc:
         raise _map_job_http_error(exc, operation, api_key) from exc
     except urllib.error.URLError as exc:
