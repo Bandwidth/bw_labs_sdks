@@ -61,7 +61,7 @@ jobs:
         with:
           name: npm-package
           path: package
-      - run: npm publish package/*.tgz --ignore-scripts --access public --provenance
+      - run: npm publish ./package/*.tgz --ignore-scripts --access public --provenance
 
   validate-python:
     if: inputs.language == 'python' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
