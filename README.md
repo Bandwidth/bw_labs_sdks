@@ -23,7 +23,9 @@ Create an API key from your dashboard at
 The **Publish package** GitHub Actions workflow can be run manually for either
 `typescript` or `python`. It reads the version already configured in the
 selected package, builds it without modifying the source, and publishes it to
-npm or PyPI. Run it from the repository's default branch after the version
+npm or PyPI. Python publishing to PyPI is deferred until the Bandwidth Labs
+PyPI organization is approved; until then the Python SDK is installed from this
+repository as described in `python/README.md`. Run it from the repository's default branch after the version
 change has been merged. If that version has already been published, the
 registry rejects it and the publish job fails.
 

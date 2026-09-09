@@ -6,13 +6,16 @@ recording for whole-file transcription.
 
 ## Install
 
-After 0.2.0 is published, install it from the package registry:
+The Python SDK is distributed from this repository; it is not published to PyPI yet.
+Install the 0.2.0 release directly from GitHub:
 
 ```sh
-pip install bw-stt==0.2.0
+pip install "git+https://github.com/Bandwidth/bw_labs_sdks.git@v0.2.0#subdirectory=python"
 ```
 
-For source setup, see [Contributing](https://github.com/Bandwidth/bw_labs_sdks/blob/main/CONTRIBUTING.md).
+To track the default branch instead of a release tag, replace `@v0.2.0` with
+`@main`. For a local checkout and development setup, see
+[Contributing](https://github.com/Bandwidth/bw_labs_sdks/blob/main/CONTRIBUTING.md).
 
 Requires Python 3.10 or later. Set your API key once:
 

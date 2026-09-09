@@ -2,6 +2,8 @@
 
 ## 0.2.0
 
+- Distribution: 0.2.0 is installed from this repository (`pip install "git+https://github.com/Bandwidth/bw_labs_sdks.git@v0.2.0#subdirectory=python"`); PyPI publication is deferred.
+
 - Reject authenticated API redirects without forwarding credentials or retrying.
 - Document job retention, callbacks, deletion, limits and local cancellation.
 - Add versioned HTTP User-Agent identification where supported.
