@@ -11,7 +11,7 @@ DEFAULT_BASE_URL = "wss://api.labs.bandwidth.com/audio/v1/listen"
 API_KEY_ENV = "BW_STT_API_KEY"
 API_KEY_HEADER = "X-BW-LABS-API-KEY"
 
-# Wire names and offline media rules confirmed against the sidecar transcribe
+# Wire names and offline media rules confirmed against the transcription service
 # contract. Keep SDK-to-wire mapping in this module.
 PARAM_REDACT_PII = "redact_pii"
 PARAM_REDACT_PII_SUB = "redact_pii_sub"
@@ -19,12 +19,17 @@ PARAM_REDACT_PII_RETURN = "redact_pii_return"
 PARAM_KEYWORDS = "keywords"
 LISTEN_PATH = "/audio/v1/listen"
 TRANSCRIBE_PATH = "/audio/v1/transcribe"
+TRANSCRIPTIONS_PATH = "/audio/v1/transcriptions"
 LISTEN_PATH_SUFFIX = "/listen"
 TRANSCRIBE_PATH_SUFFIX = "/transcribe"
+TRANSCRIPTIONS_PATH_SUFFIX = "/transcriptions"
 TRANSCRIBE_WAV_CONTENT_TYPE = "audio/wav"
 TRANSCRIBE_RAW_CONTENT_TYPE = "application/octet-stream"
 TRANSCRIBE_RAW_ENCODING = "linear16"
 TRANSCRIBE_MAX_AUDIO_DESCRIPTION = "five minutes"
+CALLBACK_URL_PARAM = "callback_url"
+CALLBACK_AUTH_HEADER_NAME = "X-Callback-Auth-Name"
+CALLBACK_AUTH_HEADER_VALUE = "X-Callback-Auth-Value"
 
 _WS_SCHEMES = {"ws": "ws", "wss": "wss", "http": "ws", "https": "wss"}
 _HTTP_SCHEMES = {"ws": "http", "wss": "https", "http": "http", "https": "https"}
@@ -98,9 +103,8 @@ class SessionParams:
         """Return query parameters for listen or the confirmed transcribe contract.
 
         ``None`` selects the listen surface. For transcribe, ``True`` selects
-        raw linear16 and ``False`` selects a WAV body. Raw-only format fields
-        and the streaming-only mode/multichannel fields never cross the HTTP
-        boundary.
+        raw linear16 and ``False`` selects a WAV body. The streaming-only mode
+        field never crosses the HTTP boundary.
         """
         if transcribe_raw and self.encoding != TRANSCRIBE_RAW_ENCODING:
             raise ValueError("raw transcribe uploads require encoding='linear16'")
@@ -108,7 +112,7 @@ class SessionParams:
         if transcribe_raw is None or transcribe_raw:
             pairs.extend([("encoding", self.encoding), ("sample_rate", str(self.sample_rate))])
         pairs.append(("channels", str(self.channels)))
-        if transcribe_raw is None and self.multichannel:
+        if self.multichannel:
             pairs.append(("multichannel", "true"))
         if self.model is not None:
             pairs.append(("model", self.model))
@@ -164,3 +168,47 @@ def build_transcribe_url(base_url: str, params: SessionParams, *, raw_input: boo
     existing = parse_qsl(parts.query, keep_blank_values=True)
     query = urlencode(existing + params.query(transcribe_raw=raw_input))
     return urlunsplit((scheme, parts.netloc, path, query, ""))
+
+
+def build_transcriptions_url(
+    base_url: str,
+    params: SessionParams | None = None,
+    *,
+    raw_input: bool | None = True,
+    query: Sequence[tuple[str, str]] | None = None,
+) -> str:
+    """Build the asynchronous transcription jobs collection URL.
+
+    ``query`` is useful for URL sources whose media type is discovered by the
+    service. When omitted, parameters are serialized with the same media and
+    feature rules as :func:`build_transcribe_url`.
+    """
+    parts = urlsplit(base_url)
+    scheme = _HTTP_SCHEMES.get(parts.scheme)
+    if scheme is None:
+        raise ValueError("base_url must use ws, wss, http, or https")
+    path = parts.path
+    if path in ("", "/"):
+        path = TRANSCRIPTIONS_PATH
+    elif path.endswith(LISTEN_PATH_SUFFIX):
+        path = path[: -len(LISTEN_PATH_SUFFIX)] + TRANSCRIPTIONS_PATH_SUFFIX
+    elif path.endswith(TRANSCRIBE_PATH_SUFFIX):
+        path = path[: -len(TRANSCRIBE_PATH_SUFFIX)] + TRANSCRIPTIONS_PATH_SUFFIX
+    elif not path.endswith(TRANSCRIPTIONS_PATH_SUFFIX):
+        path = path.rstrip("/") + TRANSCRIPTIONS_PATH_SUFFIX
+    if query is None:
+        if params is None:
+            raise ValueError("params or query is required")
+        query = params.query(transcribe_raw=raw_input)
+    existing = parse_qsl(parts.query, keep_blank_values=True)
+    return urlunsplit((scheme, parts.netloc, path, urlencode(existing + list(query)), ""))
+
+
+def append_callback_query(
+    query: list[tuple[str, str]],
+    *,
+    callback_url: str | None = None,
+) -> None:
+    """Append the callback URL query parameter."""
+    if callback_url is not None:
+        query.append((CALLBACK_URL_PARAM, callback_url))

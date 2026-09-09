@@ -20,9 +20,14 @@ export {
   BwSttError,
   ConnectionClosedError,
   InvalidRequestError,
+  JobLimitError,
+  JobPlatformUnavailableError,
   ProtocolError,
   RateLimitError,
   ServiceUnavailableError,
+  TranscriptionJobError,
+  TranscriptionNotFoundError,
+  TranscriptionTimeoutError,
 } from "./errors";
 export { TranscriptAssembler, WordAssembler } from "./transcript";
 export type { DisplayWord } from "./transcript";
@@ -33,6 +38,18 @@ export type {
   SttMode,
   TranscribeOptions,
 } from "./options";
-export type { Transcription, TranscriptionSegment } from "./transcribe";
+export type { Transcription, TranscriptionChannel, TranscriptionSegment } from "./transcribe";
+export { TranscriptionsClient } from "./transcriptions";
+export type {
+  TranscriptionGetOptions,
+  TranscriptionJob,
+  TranscriptionJobErrorDetail,
+  TranscriptionJobOptions,
+  TranscriptionJobResult,
+  TranscriptionJobStatus,
+  TranscriptionJobSubmission,
+  TranscriptionSubmitRequest,
+  TranscriptionWaitOptions,
+} from "./transcriptions";
 export type { Encoding } from "./framing";
 export type { Transport, TransportHandlers, TransportRequest, TransportSocket } from "./transport";

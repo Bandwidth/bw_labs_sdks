@@ -433,7 +433,7 @@ def test_async_transcribe(mock_http_server: HttpServerFactory, api_key_env: str)
         assert result.text == "i need a dry van"
         assert result.segments[0].text == "i need a dry van"
         assert result.audio_duration_seconds == 2.5
-        assert result.model_info == {"name": "bw-streaming-en", "version": "current"}
+        assert result.model_info == {"name": "bw-listen-en", "version": "current"}
 
     asyncio.run(scenario())
     assert server.recorder.body == b"\0" * 32000

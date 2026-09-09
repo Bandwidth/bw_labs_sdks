@@ -20,6 +20,15 @@ export interface TranscriptionSegment {
   readonly text: string;
 }
 
+export interface TranscriptionChannel {
+  readonly channel: number;
+  readonly text: string;
+  readonly words: readonly Word[];
+  readonly segments: readonly TranscriptionSegment[];
+  readonly redactedEntities?: readonly RedactedEntity[];
+  readonly raw: Record<string, unknown>;
+}
+
 /**
  * Result of an offline transcription. Wire mapping: `request_id` -> requestId,
  * `audio_duration_seconds` -> audioDurationSeconds, `model_info` -> modelInfo.
@@ -35,6 +44,8 @@ export interface Transcription {
   readonly audioDurationSeconds: number;
   readonly modelInfo: Record<string, unknown>;
   readonly redactedEntities?: readonly RedactedEntity[];
+  /** Per-channel results when the request used multichannel transcription. */
+  readonly channels?: readonly TranscriptionChannel[];
   readonly raw: Record<string, unknown>;
 }
 
@@ -89,7 +100,7 @@ export async function requestTranscription(request: TranscribeRequest): Promise<
       throw new ServiceUnavailableError("transcribe request failed", { cause });
     }
     if (!response.ok) {
-      throw await mapHttpFailure(response);
+      throw await mapHttpFailure(response, request.apiKey);
     }
     let payload: unknown;
     try {
@@ -105,7 +116,7 @@ export async function requestTranscription(request: TranscribeRequest): Promise<
   }
 }
 
-async function mapHttpFailure(response: Response): Promise<Error> {
+async function mapHttpFailure(response: Response, apiKey: string): Promise<Error> {
   const status = response.status;
   if (status === 401 || status === 403) {
     return new AuthenticationError(`the API key was rejected (HTTP ${status})`, status);
@@ -127,18 +138,74 @@ async function mapHttpFailure(response: Response): Promise<Error> {
   }
   const detail = await response.text().catch(() => "");
   return new InvalidRequestError(
-    `transcribe request rejected (HTTP ${status})${detail ? `: ${detail}` : ""}`,
+    `transcribe request rejected (HTTP ${status})${detail ? `: ${detail.split(apiKey).join("[redacted]")}` : ""}`,
     status,
   );
 }
 
-function parseTranscription(payload: unknown): Transcription {
+function parseWords(value: Record<string, unknown>, context: string): Word[] {
+  const rawWords = value.words ?? [];
+  if (!Array.isArray(rawWords)) throw new ProtocolError(`${context} words is not an array`);
+  return rawWords.map((entry, index) => {
+    if (entry === null || typeof entry !== "object") {
+      throw new ProtocolError(`${context} words[${index}] is not an object`);
+    }
+    const word = entry as Record<string, unknown>;
+    if (typeof word.word !== "string" || typeof word.start !== "number" || typeof word.end !== "number") {
+      throw new ProtocolError(`${context} words[${index}] is malformed`);
+    }
+    return { word: word.word, start: word.start, end: word.end };
+  });
+}
+
+function parseSegments(value: Record<string, unknown>, context: string): TranscriptionSegment[] {
+  const rawSegments = value.segments ?? [];
+  if (!Array.isArray(rawSegments)) {
+    throw new ProtocolError(`${context} segments is not an array`);
+  }
+  return rawSegments.map((entry, index) => {
+    if (entry === null || typeof entry !== "object") {
+      throw new ProtocolError(`${context} segments[${index}] is not an object`);
+    }
+    const segment = entry as Record<string, unknown>;
+    if (typeof segment.start !== "number" || typeof segment.end !== "number" || typeof segment.text !== "string") {
+      throw new ProtocolError(`${context} segments[${index}] is malformed`);
+    }
+    return { start: segment.start, end: segment.end, text: segment.text };
+  });
+}
+
+function parseTranscriptionChannel(payload: unknown, index: number): TranscriptionChannel {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new ProtocolError(`transcribe response channels[${index}] is not an object`);
+  }
+  const raw = payload as Record<string, unknown>;
+  if (typeof raw.channel !== "number" || !Number.isInteger(raw.channel)) {
+    throw new ProtocolError(`transcribe response channels[${index}] is missing channel`);
+  }
+  if (typeof raw.text !== "string") {
+    throw new ProtocolError(`transcribe response channels[${index}] is missing text`);
+  }
+  const redactedEntities = parseRedactedEntities(
+    raw.redacted_entities,
+    `transcribe response channels[${index}].redacted_entities`,
+  );
+  return {
+    channel: raw.channel,
+    text: raw.text,
+    words: parseWords(raw, `transcribe response channels[${index}]`),
+    segments: parseSegments(raw, `transcribe response channels[${index}]`),
+    ...(redactedEntities === undefined ? {} : { redactedEntities }),
+    raw,
+  };
+}
+
+export function parseTranscription(payload: unknown): Transcription {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
     throw new ProtocolError("transcribe response is not a JSON object");
   }
   const raw = payload as Record<string, unknown>;
   if (typeof raw.request_id !== "string") throw new ProtocolError("transcribe response is missing request_id");
-  if (typeof raw.text !== "string") throw new ProtocolError("transcribe response is missing text");
   if (typeof raw.audio_duration_seconds !== "number") {
     throw new ProtocolError("transcribe response is missing audio_duration_seconds");
   }
@@ -146,41 +213,29 @@ function parseTranscription(payload: unknown): Transcription {
   if (modelInfo !== undefined && (modelInfo === null || typeof modelInfo !== "object" || Array.isArray(modelInfo))) {
     throw new ProtocolError("transcribe response model_info is not an object");
   }
-  const rawWords = raw.words ?? [];
-  if (!Array.isArray(rawWords)) throw new ProtocolError("transcribe response words is not an array");
-  const words: Word[] = rawWords.map((entry, index) => {
-    if (entry === null || typeof entry !== "object") {
-      throw new ProtocolError(`transcribe response words[${index}] is not an object`);
-    }
-    const word = entry as Record<string, unknown>;
-    if (typeof word.word !== "string" || typeof word.start !== "number" || typeof word.end !== "number") {
-      throw new ProtocolError(`transcribe response words[${index}] is malformed`);
-    }
-    return { word: word.word, start: word.start, end: word.end };
-  });
-  const rawSegments = raw.segments ?? [];
-  if (!Array.isArray(rawSegments)) {
-    throw new ProtocolError("transcribe response segments is not an array");
+  const multichannel = raw.channels !== undefined;
+  if (multichannel && !Array.isArray(raw.channels)) {
+    throw new ProtocolError("transcribe response channels is not an array");
   }
-  const segments: TranscriptionSegment[] = rawSegments.map((entry, index) => {
-    if (entry === null || typeof entry !== "object") {
-      throw new ProtocolError(`transcribe response segments[${index}] is not an object`);
-    }
-    const segment = entry as Record<string, unknown>;
-    if (typeof segment.start !== "number" || typeof segment.end !== "number" || typeof segment.text !== "string") {
-      throw new ProtocolError(`transcribe response segments[${index}] is malformed`);
-    }
-    return { start: segment.start, end: segment.end, text: segment.text };
-  });
+  if (!multichannel && typeof raw.text !== "string") {
+    throw new ProtocolError("transcribe response is missing text");
+  }
+  const channels = multichannel
+    ? (raw.channels as unknown[]).map((channel, index) => parseTranscriptionChannel(channel, index))
+    : undefined;
+  const text = multichannel ? (typeof raw.text === "string" ? raw.text : "") : (raw.text as string);
+  const words = parseWords(raw, "transcribe response");
+  const segments = parseSegments(raw, "transcribe response");
   const redactedEntities = parseRedactedEntities(raw.redacted_entities, "transcribe response.redacted_entities");
   return {
     requestId: raw.request_id,
-    text: raw.text,
+    text,
     words,
     segments,
     audioDurationSeconds: raw.audio_duration_seconds,
     modelInfo: modelInfo === undefined ? {} : (modelInfo as Record<string, unknown>),
     ...(redactedEntities === undefined ? {} : { redactedEntities }),
+    ...(channels === undefined ? {} : { channels }),
     raw,
   };
 }

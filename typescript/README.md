@@ -115,12 +115,61 @@ A successful response has this shape:
     {"start": 0.00, "end": 0.72, "text": "i need a dry van"}
   ],
   "audio_duration_seconds": 0.72,
-  "model_info": {"name": "bw-streaming-en", "version": "current"}
+  "model_info": {"name": "bw-listen-en", "version": "current"}
 }
 ```
 
 `words` is a timestamped word list and may be empty. `segments` is a typed
 list with `start`, `end`, and `text` fields.
+
+For raw audio, pass `channels: 2` explicitly with `multichannel: true` because
+the client cannot infer the channel count. WAV uploads and URL submissions let
+the server infer the channel count. A stereo recording with `multichannel:
+true` returns an independent typed result for each channel. The single-channel
+result keeps the same shape when `multichannel` is omitted:
+
+```ts
+const stereo = await client.transcribe(rawLinear16, {
+  channels: 2,
+  multichannel: true,
+});
+for (const channel of stereo.channels ?? []) console.log(channel.channel, channel.text);
+```
+
+### Asynchronous transcription jobs
+
+Use the `transcriptions` namespace for recordings that should be processed as
+jobs. Byte uploads use raw linear16 by default. Set `raw: false` when the bytes
+are a complete WAV container, which is sent as `audio/wav` without raw-only
+format parameters. URL submissions send the location in JSON:
+
+```ts
+const job = await client.transcriptions.submit({ audio: rawLinear16 });
+const result = await client.transcriptions.wait(job.id);
+console.log(result.text);
+
+const urlJob = await client.transcriptions.submit({
+  audioUrl: "https://media.example.com/call.wav",
+  callbackUrl: "https://hooks.example.com/stt",
+  callbackAuthHeaderName: "X-Callback-Key",
+  callbackAuthHeaderValue: "callback-secret",
+});
+console.log(urlJob.status);
+```
+
+For raw stereo jobs, pass `channels: 2, multichannel: true` explicitly. WAV and
+URL jobs let the server infer the channel count. Pass `channels: 2,
+multichannel: true` when the client should include the stereo declaration.
+For upload callbacks, `callbackUrl` is a query parameter and
+`callbackAuthHeaderName` and `callbackAuthHeaderValue` travel in the
+`X-Callback-Auth-Name` and `X-Callback-Auth-Value` request headers. URL
+submissions put all three callback options in the JSON `callback` object. The
+SDK never sends callback credentials in the query. `wait(id)` defaults to a
+600 second overall timeout and polls every 2 seconds. Pass `timeoutMs` and
+`pollIntervalMs` to change them, and use `signal` to cancel a wait while it is
+polling. A wait timeout throws `TranscriptionTimeoutError`. The namespace also
+provides `get(id)` and `delete(id)`. Uploads are fully buffered in memory, up
+to 512 MiB, including audio downloaded from a URL.
 
 ## Streaming audio
 
@@ -231,7 +280,13 @@ const session = await client.connect({ keywords: ["dry van", "reefer", "backhaul
 
 ## Error handling
 
-Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and timeouts. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
+Connection-time and transcribe failures reject with typed errors: `AuthenticationError` (401/403), `RateLimitError` with `retryAfterSeconds` (429), `InvalidRequestError` (400, 413, and other unexpected 4xx on transcribe), and `ServiceUnavailableError` for 5xx and transport-level failures, including network errors and request timeouts. `TranscriptionTimeoutError` represents an expired asynchronous job `wait()` deadline. `ConnectionClosedError` covers a WebSocket that drops mid-session or an upgrade rejection the transport cannot classify (browsers only expose a generic close).
+
+Job requests use `JobLimitError` for `job_limit_reached` and
+`job_submission_busy`; both expose `retryAfterSeconds` when the server sends
+`Retry-After`. `JobPlatformUnavailableError` represents
+`job_platform_unavailable`, and `TranscriptionNotFoundError` represents an
+unknown or inaccessible job id.
 
 In-band `Error` events, including `transcript_too_large`, do not throw; they
 arrive through `session.on("error", ...)` and `session.events()`. If the

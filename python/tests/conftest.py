@@ -8,10 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from .mocks import HttpScript, MockSttServer, MockTranscribeServer, Script
+from .mocks import HttpScript, MockSttServer, MockTranscribeServer, MockTranscriptionsServer, Script
 
 ServerFactory = Callable[..., MockSttServer]
 HttpServerFactory = Callable[..., MockTranscribeServer]
+JobServerFactory = Callable[..., MockTranscriptionsServer]
 
 
 def wait_until(condition: Callable[[], bool], timeout: float = 5.0) -> None:
@@ -57,6 +58,20 @@ def api_key_env(monkeypatch: pytest.MonkeyPatch) -> str:
     key = "bwa_key_test"
     monkeypatch.setenv("BW_STT_API_KEY", key)
     return key
+
+
+@pytest.fixture
+def mock_transcriptions_server() -> Iterator[JobServerFactory]:
+    servers: list[MockTranscriptionsServer] = []
+
+    def factory(scripts: list[HttpScript]) -> MockTranscriptionsServer:
+        server = MockTranscriptionsServer(scripts)
+        servers.append(server)
+        return server
+
+    yield factory
+    for server in servers:
+        server.stop()
 
 
 def write_wav(path: Path, seconds: float, sample_rate: int = 16000, channels: int = 1) -> bytes:

@@ -16,6 +16,7 @@ from ._framing import FrameChunker, iter_raw_chunks, iter_wav_chunks
 from ._wire import DEFAULT_BASE_URL
 from .aio import AsyncBwSttClient, AsyncSession, _resolve_api_key
 from .events import Event, Segment, SessionClosed, SessionOpened, Transcript, Transcription
+from .transcriptions import TranscriptionsClient
 
 __all__ = ["BwSttClient", "Session"]
 
@@ -76,6 +77,9 @@ class BwSttClient:
         self.api_key = api_key
         self.base_url = base_url or DEFAULT_BASE_URL
         self._async = AsyncBwSttClient(api_key, base_url)
+        self.transcriptions = TranscriptionsClient(
+            self.base_url, lambda: _resolve_api_key(self.api_key)
+        )
         self._loop_thread: _EventLoopThread | None = None
         self._sessions: weakref.WeakSet[Session] = weakref.WeakSet()
 
@@ -139,6 +143,7 @@ class BwSttClient:
         encoding: Literal["linear16"] = "linear16",
         sample_rate: int = 16000,
         channels: int = 1,
+        multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
         redact_pii_sub: str | None = None,
@@ -162,6 +167,7 @@ class BwSttClient:
             encoding=encoding,
             sample_rate=sample_rate,
             channels=channels,
+            multichannel=multichannel,
             model=model,
             redact_pii=redact_pii,
             redact_pii_sub=redact_pii_sub,

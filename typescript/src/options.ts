@@ -46,7 +46,7 @@ export interface ConnectOptions extends MediaOptions, FeatureOptions {
 }
 
 export interface TranscribeOptions
-  extends Omit<MediaOptions, "encoding" | "multichannel">,
+  extends Omit<MediaOptions, "encoding">,
     FeatureOptions {
   /** Raw HTTP uploads are linear16. WAV files carry their own format in the container. */
   encoding?: "linear16";
@@ -144,6 +144,7 @@ export interface ResolvedTranscribeMedia {
   readonly encoding: "linear16";
   readonly sampleRate: number;
   readonly channels: number;
+  readonly multichannel: boolean;
   readonly model?: string;
 }
 
@@ -154,16 +155,27 @@ export function resolveTranscribeMediaOptions(options: TranscribeOptions): Resol
   }
   const sampleRate = options.sampleRate ?? 16000;
   const channels = options.channels ?? 1;
+  const multichannel = options.multichannel ?? false;
   if (sampleRate !== 16000 && sampleRate !== 8000) {
     throw new RangeError("sampleRate must be 16000 or 8000");
   }
   if (channels !== 1 && channels !== 2) {
     throw new RangeError("channels must be 1 or 2");
   }
-  const resolved: { encoding: "linear16"; sampleRate: number; channels: number; model?: string } = {
+  if (multichannel && channels !== 2) {
+    throw new RangeError("multichannel requires channels: 2");
+  }
+  const resolved: {
+    encoding: "linear16";
+    sampleRate: number;
+    channels: number;
+    multichannel: boolean;
+    model?: string;
+  } = {
     encoding,
     sampleRate,
     channels,
+    multichannel,
   };
   if (options.model !== undefined) resolved.model = options.model;
   return resolved;
