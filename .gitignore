@@ -13,3 +13,8 @@ out/
 
 # No canonical github/gitignore template exists for: PHP, Groovy, Shell, Docker, CloudFormation, Other
 # These render baseline-only (IDE ignores above; use .gitignore Options to add macOS rules).
+
+.env
+.env.*
+!.env.example
+venv/

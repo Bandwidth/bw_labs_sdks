@@ -1,3 +1,4 @@
+import { redirectFailure, userAgentHeaders } from "./http";
 import {
   AuthenticationError,
   InvalidRequestError,
@@ -297,7 +298,7 @@ async function mapJobFailure(response: Response, apiKey: string, operation: stri
   const suffix = detail === undefined ? "" : `: ${safeText(detail, apiKey)}`;
   const status = response.status;
   if (status >= 200 && status < 300) {
-    return new ProtocolError(`${operation} returned unexpected HTTP ${status}`);
+    return new ProtocolError(`${operation} returned unexpected HTTP ${status}`, { status });
   }
   if (status === 401 || status === 403) {
     return new AuthenticationError(`the API key was rejected (HTTP ${status})`, status);
@@ -339,8 +340,10 @@ async function requestJob(request: JobRequest): Promise<unknown> {
     let response: Response;
     try {
       response = await fetch(request.url, {
+        redirect: "error",
         method: request.method,
         headers: {
+          ...userAgentHeaders(),
           [API_KEY_HEADER]: request.apiKey,
           ...(request.headers ?? {}),
           ...(request.contentType === undefined ? {} : { "Content-Type": request.contentType }),
@@ -351,6 +354,8 @@ async function requestJob(request: JobRequest): Promise<unknown> {
     } catch (cause) {
       if (request.signal?.aborted) throw request.signal.reason ?? cause;
       if (timedOut) throw new ServiceUnavailableError(`${request.operation} timed out after ${request.timeoutMs} ms`);
+      const redirect = redirectFailure(cause);
+      if (redirect !== undefined) throw redirect;
       throw new ServiceUnavailableError(`${request.operation} failed`, { cause });
     }
     if (response.status !== request.expectedStatus) {
@@ -377,6 +382,18 @@ export class TranscriptionsClient {
     private readonly apiKey: () => string,
   ) {}
 
+  /**
+   * Uploads are limited to 512 MiB and audio to 1800 s. Per-key limits
+   * return Retry-After 30, busy submissions 5 (seconds), without SDK retry.
+   * Callbacks are at least once, retried no sooner than 30 s, up to ten
+   * recorded failures; deduplicate by job id. Completed status and callbacks
+   * describe the transcript only.
+   * Bytes default to raw linear16; use raw: false for WAV containers.
+   * URL downloads follow at most three redirects within 60 s.
+   * timeoutMs and pollIntervalMs use milliseconds. API errors use BwSttError
+   * subclasses; local validation uses TypeError or RangeError. AbortSignal
+   * cancels the local request and does not delete an accepted server job.
+   */
   async submit(request: TranscriptionSubmitRequest): Promise<TranscriptionJobSubmission> {
     const hasAudio = request.audio !== undefined;
     const hasAudioUrl = request.audioUrl !== undefined;
@@ -417,6 +434,14 @@ export class TranscriptionsClient {
     return parseSubmission(payload);
   }
 
+  /**
+   * The record expires seven days after its last update; each stored object
+   * expires seven days after it was written. Completed status describes the
+   * transcript only.
+   * timeoutMs and pollIntervalMs use milliseconds. API errors use BwSttError
+   * subclasses; local validation uses TypeError or RangeError. AbortSignal
+   * cancels the local request and does not delete an accepted server job.
+   */
   async get(id: string, options: TranscriptionGetOptions = {}): Promise<TranscriptionJob> {
     const timeoutMs = options.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS;
     const payload = await requestJob({
@@ -431,6 +456,16 @@ export class TranscriptionsClient {
     return parseJob(payload);
   }
 
+  /**
+   * Poll every 2000 ms by default for at most 600000 ms.
+   * Throws TranscriptionTimeoutError on deadline and TranscriptionJobError
+   * on terminal failure. The record expires seven days after its last update; each stored object
+   * expires seven days after it was written. Completed status describes the
+   * transcript only.
+   * timeoutMs and pollIntervalMs use milliseconds. API errors use BwSttError
+   * subclasses; local validation uses TypeError or RangeError. AbortSignal
+   * cancels the local request and does not delete an accepted server job.
+   */
   async wait(id: string, options: TranscriptionWaitOptions = {}): Promise<Transcription> {
     checkId(id);
     const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
@@ -474,6 +509,13 @@ export class TranscriptionsClient {
     }
   }
 
+  /**
+   * Remove the record and stored audio/results, and cancel an unfinished
+   * platform capture. Separately retained captures and usage are not removed.
+   * timeoutMs and pollIntervalMs use milliseconds. API errors use BwSttError
+   * subclasses; local validation uses TypeError or RangeError. AbortSignal
+   * cancels the local request and does not delete an accepted server job.
+   */
   async delete(id: string, options: TranscriptionGetOptions = {}): Promise<void> {
     await requestJob({
       url: jobUrl(this.baseUrl, id),

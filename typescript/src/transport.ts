@@ -1,3 +1,4 @@
+import { userAgentHeaders } from "./http";
 import { AuthenticationError, BwSttError } from "./errors";
 
 export interface TransportRequest {
@@ -36,7 +37,7 @@ export const defaultTransport: Transport = (request, handlers) => {
 
 async function nodeTransport(request: TransportRequest, handlers: TransportHandlers): Promise<TransportSocket> {
   const { WebSocket: NodeWebSocket } = await import("ws");
-  const socket = new NodeWebSocket(request.url, { headers: { ...request.headers } });
+  const socket = new NodeWebSocket(request.url, { headers: { ...userAgentHeaders(), ...request.headers } });
   socket.on("open", () => handlers.onOpen());
   socket.on("message", (data, isBinary) => {
     const bytes = Array.isArray(data)

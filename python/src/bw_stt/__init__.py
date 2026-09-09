@@ -1,5 +1,6 @@
 """Python SDK for the Bandwidth Labs speech-to-text API."""
 
+from ._version import __version__ as __version__
 from .aio import AsyncBwSttClient, AsyncSession
 from .errors import (
     AuthenticationError,
@@ -40,8 +41,6 @@ from .jobs import (
 from .sync import BwSttClient, Session
 from .transcript import DisplayWord, TranscriptAssembler, WordAssembler
 from .transcriptions import AsyncTranscriptionsClient, TranscriptionsClient
-
-__version__ = "0.2.0"
 
 __all__ = [
     "AsyncBwSttClient",

@@ -6,12 +6,13 @@ recording for whole-file transcription.
 
 ## Install
 
-During the beta, install from a clone of this repository:
+After 0.2.0 is published, install it from the package registry:
 
-```bash
-git clone https://github.com/Bandwidth/bw_labs_sdks.git
-pip install ./bw_labs_sdks/python
+```sh
+pip install bw-stt==0.2.0
 ```
+
+For source setup, see [Contributing](https://github.com/Bandwidth/bw_labs_sdks/blob/main/CONTRIBUTING.md).
 
 Requires Python 3.10 or later. Set your API key once:
 
@@ -182,8 +183,49 @@ The SDK never sends callback credentials in the query. `wait()` defaults to a
 600 second overall timeout and polls every 2 seconds; pass `timeout` and
 `poll_interval` to change them. A timeout raises `TranscriptionTimeoutError`,
 which is also a built-in `TimeoutError`. The async client exposes the same
-operations through `await client.transcriptions`. Uploads are fully buffered in
-memory, up to 512 MiB, including audio downloaded from a URL.
+operations through awaited methods. Uploads are fully buffered in memory;
+URL downloads happen on the service.
+
+```python
+import asyncio
+from bw_stt import AsyncBwSttClient
+
+
+async def main():
+    client = AsyncBwSttClient()
+    job = await client.transcriptions.submit("call.wav")
+    result = await client.transcriptions.wait(job.id)
+    print(result.text)
+
+
+asyncio.run(main())
+```
+
+HTTP timeouts use a monotonic budget covering connect, upload, headers and body.
+The in-process transport recomputes socket timeouts from the remaining budget.
+Async cancellation closes the active socket and waits for the request thread to
+exit. System DNS resolution cannot be interrupted; its elapsed time consumes the
+budget, but a stalled system resolver can delay timeout or cancellation. The
+HTTP transport connects directly and does not use environment proxy variables.
+
+### Job lifecycle
+
+The per-key job limit returns `Retry-After: 30`; a busy submission returns
+`Retry-After: 5` (seconds). The SDK surfaces these errors without retrying.
+The service follows at most three redirects when fetching `audio_url`, with a
+60 s whole-download limit. Authenticated SDK API calls reject redirects.
+Uploads are limited to 512 MiB and job audio to 1800 s. These job limits are
+separate from the synchronous transcription endpoint's limits.
+
+Callbacks are delivered at least once. Retries occur no sooner than 30 s after
+a failure, with up to ten recorded failures. Deduplicate callbacks by job id.
+Completed status and callbacks describe the transcript only.
+
+The job record expires seven days after its last update. Each stored object
+expires seven days after it was written. DELETE removes the job record and
+stored audio/results. It does not remove separately retained captures or usage,
+and cancels an unfinished platform capture. Local timeout or cancellation does
+not delete an accepted server job; call delete explicitly when needed.
 
 ## Live word display
 
@@ -231,13 +273,13 @@ for transcript in transcripts:
             print(token, "maps to", entity.text, entity.kind, entity.start, entity.end)
 ```
 
-The demand transcript includes a summary such as:
+This synthetic demand transcript uses an invalid SSN placeholder:
 
 ```json
 {
   "type": "Transcript",
   "channel": 0,
-  "text": "my number is [redacted]",
+  "text": "my number is hash:v1:9f2c41d08ab37e15",
   "words": [],
   "redaction": {
     "applied": true,
@@ -247,7 +289,7 @@ The demand transcript includes a summary such as:
     {
       "token": "hash:v1:9f2c41d08ab37e15",
       "kind": "pii",
-      "text": "123-45-6789",
+      "text": "000-00-0000",
       "start": 2.10,
       "end": 2.45
     }

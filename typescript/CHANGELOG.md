@@ -2,6 +2,12 @@
 
 ## 0.2.0
 
+- Reject authenticated API redirects without forwarding credentials or retrying.
+- Document job retention, callbacks, deletion, limits and local cancellation.
+- Add versioned HTTP User-Agent identification where supported.
+- Require Node >=22; browser support is documented separately.
+- Update development dependencies to address audit advisories.
+
 - Added asynchronous transcription jobs with `submit` for bytes, `submit` with
   `audioUrl` for URL sources, `get`, `wait`, and `delete`.
 - Added typed multichannel transcription results that match the service's

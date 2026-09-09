@@ -14,6 +14,7 @@ from typing import BinaryIO, Literal
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from . import _http
+from ._transport import run_async
 from ._wire import (
     CALLBACK_AUTH_HEADER_NAME,
     CALLBACK_AUTH_HEADER_VALUE,
@@ -146,7 +147,7 @@ def _prepare_upload(
     multichannel: bool,
     model: str | None,
     redact_pii: bool,
-    redact_pii_sub: str | None,
+    redact_pii_sub: Literal["entity_name", "hash"] | None,
     redact_pii_return: bool,
     keywords: Sequence[str] | None,
     raw: bool,
@@ -235,7 +236,7 @@ def _url_query(
     multichannel: bool,
     model: str | None,
     redact_pii: bool,
-    redact_pii_sub: str | None,
+    redact_pii_sub: Literal["entity_name", "hash"] | None,
     redact_pii_return: bool,
     keywords: Sequence[str] | None,
     raw: bool,
@@ -309,7 +310,7 @@ class TranscriptionsClient:
         multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
-        redact_pii_sub: str | None = None,
+        redact_pii_sub: Literal["entity_name", "hash"] | None = None,
         redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         raw: bool = False,
@@ -318,13 +319,16 @@ class TranscriptionsClient:
         callback_auth_header_value: str | None = None,
         timeout: float = _DEFAULT_JOB_TIMEOUT,
     ) -> TranscriptionJobSubmission:
-        """Submit WAV, raw bytes, or a binary file object for processing.
-
-        With ``raw=False``, bytes and binary file objects beginning with a
-        RIFF/WAVE header are uploaded as WAV and their header supplies the
-        sample rate and channel count. Other bytes are treated as raw
-        linear16; ``raw=True`` always forces raw treatment. Uploads are fully
-        buffered in memory.
+        """Uploads are limited to 512 MiB and audio to 1800 s. Per-key limits
+        return Retry-After 30, busy submissions 5 (seconds), without SDK retry.
+        Callbacks are at least once, retried no sooner than 30 s, up to ten
+        recorded failures; deduplicate by job id. Completed status and callbacks
+        describe the transcript only.
+        WAV paths and RIFF/WAVE bytes default to WAV; other bytes use raw linear16.
+        Uploads are buffered in memory.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
         """
         _check_timeout(timeout)
         data, content_type, query, callback_headers = _prepare_upload(
@@ -363,7 +367,7 @@ class TranscriptionsClient:
         multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
-        redact_pii_sub: str | None = None,
+        redact_pii_sub: Literal["entity_name", "hash"] | None = None,
         redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         raw: bool = False,
@@ -372,7 +376,17 @@ class TranscriptionsClient:
         callback_auth_header_value: str | None = None,
         timeout: float = _DEFAULT_JOB_TIMEOUT,
     ) -> TranscriptionJobSubmission:
-        """Submit an HTTPS audio URL for processing."""
+        """Uploads are limited to 512 MiB and audio to 1800 s. Per-key limits
+        return Retry-After 30, busy submissions 5 (seconds), without SDK retry.
+        Callbacks are at least once, retried no sooner than 30 s, up to ten
+        recorded failures; deduplicate by job id. Completed status and callbacks
+        describe the transcript only.
+        The service follows at most three audio_url redirects within a 60 s
+        whole-download limit.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
         _check_timeout(timeout)
         query = _url_query(
             encoding=encoding,
@@ -405,7 +419,13 @@ class TranscriptionsClient:
         )
 
     def get(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> TranscriptionJob:
-        """Return the current status for a transcription job."""
+        """The record expires seven days after its last update; each stored object
+        expires seven days after it was written. Completed status describes the
+        transcript only.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
         _check_timeout(timeout)
         return _http.get_job(_job_item_url(self._base_url, id), self._api_key(), timeout=timeout)
 
@@ -416,7 +436,15 @@ class TranscriptionsClient:
         poll_interval: float = 2.0,
         timeout: float = _DEFAULT_WAIT_TIMEOUT,
     ) -> Transcription:
-        """Poll until a job completes and return its typed transcription result."""
+        """Poll every 2 seconds by default, for at most 600 seconds.
+        Raise TranscriptionTimeoutError on deadline, TranscriptionJobError on
+        terminal failure. The record expires seven days after its last update; each stored object
+        expires seven days after it was written. Completed status describes the
+        transcript only.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
         if not math.isfinite(poll_interval) or poll_interval < 0:
             raise ValueError("poll_interval must be a non-negative finite number")
         _check_timeout(timeout)
@@ -432,6 +460,8 @@ class TranscriptionsClient:
                 if time.monotonic() >= deadline:
                     raise _wait_timeout_error(timeout) from exc
                 raise
+            if time.monotonic() >= deadline:
+                raise _wait_timeout_error(timeout)
             result = _terminal_result(job, api_key)
             if result is not None:
                 return result
@@ -441,7 +471,12 @@ class TranscriptionsClient:
             time.sleep(min(poll_interval, remaining))
 
     def delete(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> None:
-        """Delete a transcription job."""
+        """Remove the record and stored audio/results, and cancel an unfinished
+        platform capture. Separately retained captures and usage are not removed.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
         _check_timeout(timeout)
         _http.delete_job(_job_item_url(self._base_url, id), self._api_key(), timeout=timeout)
 
@@ -462,7 +497,7 @@ class AsyncTranscriptionsClient:
         multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
-        redact_pii_sub: str | None = None,
+        redact_pii_sub: Literal["entity_name", "hash"] | None = None,
         redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         raw: bool = False,
@@ -471,7 +506,18 @@ class AsyncTranscriptionsClient:
         callback_auth_header_value: str | None = None,
         timeout: float = _DEFAULT_JOB_TIMEOUT,
     ) -> TranscriptionJobSubmission:
-        return await asyncio.to_thread(
+        """Uploads are limited to 512 MiB and audio to 1800 s. Per-key limits
+        return Retry-After 30, busy submissions 5 (seconds), without SDK retry.
+        Callbacks are at least once, retried no sooner than 30 s, up to ten
+        recorded failures; deduplicate by job id. Completed status and callbacks
+        describe the transcript only.
+        WAV paths and RIFF/WAVE bytes default to WAV; other bytes use raw linear16.
+        Uploads are buffered in memory.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
+        return await run_async(
             self._sync.submit,
             audio,
             encoding=encoding,
@@ -500,7 +546,7 @@ class AsyncTranscriptionsClient:
         multichannel: bool = False,
         model: str | None = None,
         redact_pii: bool = False,
-        redact_pii_sub: str | None = None,
+        redact_pii_sub: Literal["entity_name", "hash"] | None = None,
         redact_pii_return: bool = False,
         keywords: Sequence[str] | None = None,
         raw: bool = False,
@@ -509,7 +555,18 @@ class AsyncTranscriptionsClient:
         callback_auth_header_value: str | None = None,
         timeout: float = _DEFAULT_JOB_TIMEOUT,
     ) -> TranscriptionJobSubmission:
-        return await asyncio.to_thread(
+        """Uploads are limited to 512 MiB and audio to 1800 s. Per-key limits
+        return Retry-After 30, busy submissions 5 (seconds), without SDK retry.
+        Callbacks are at least once, retried no sooner than 30 s, up to ten
+        recorded failures; deduplicate by job id. Completed status and callbacks
+        describe the transcript only.
+        The service follows at most three audio_url redirects within a 60 s
+        whole-download limit.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
+        return await run_async(
             self._sync.submit_url,
             url,
             encoding=encoding,
@@ -529,7 +586,14 @@ class AsyncTranscriptionsClient:
         )
 
     async def get(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> TranscriptionJob:
-        return await asyncio.to_thread(self._sync.get, id, timeout=timeout)
+        """The record expires seven days after its last update; each stored object
+        expires seven days after it was written. Completed status describes the
+        transcript only.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
+        return await run_async(self._sync.get, id, timeout=timeout)
 
     async def wait(
         self,
@@ -538,6 +602,15 @@ class AsyncTranscriptionsClient:
         poll_interval: float = 2.0,
         timeout: float = _DEFAULT_WAIT_TIMEOUT,
     ) -> Transcription:
+        """Poll every 2 seconds by default, for at most 600 seconds.
+        Raise TranscriptionTimeoutError on deadline, TranscriptionJobError on
+        terminal failure. The record expires seven days after its last update; each stored object
+        expires seven days after it was written. Completed status describes the
+        transcript only.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
         if not math.isfinite(poll_interval) or poll_interval < 0:
             raise ValueError("poll_interval must be a non-negative finite number")
         _check_timeout(timeout)
@@ -553,6 +626,8 @@ class AsyncTranscriptionsClient:
                 if time.monotonic() >= deadline:
                     raise _wait_timeout_error(timeout) from exc
                 raise
+            if time.monotonic() >= deadline:
+                raise _wait_timeout_error(timeout)
             result = _terminal_result(job, api_key)
             if result is not None:
                 return result
@@ -562,4 +637,10 @@ class AsyncTranscriptionsClient:
             await asyncio.sleep(min(poll_interval, remaining))
 
     async def delete(self, id: str, *, timeout: float = _DEFAULT_JOB_TIMEOUT) -> None:
-        await asyncio.to_thread(self._sync.delete, id, timeout=timeout)
+        """Remove the record and stored audio/results, and cancel an unfinished
+        platform capture. Separately retained captures and usage are not removed.
+        Timeouts are in seconds and cover the entire HTTP exchange. API errors
+        raise BwSttError subclasses; invalid local options raise ValueError or
+        TypeError. Local cancellation does not delete an accepted server job.
+        """
+        await run_async(self._sync.delete, id, timeout=timeout)
