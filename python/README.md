@@ -358,6 +358,12 @@ except ConnectionClosedError as exc:
 There is no resume protocol: after an unexpected close, reconnecting starts a
 new session, and you decide what audio to send again.
 
+The SDK requires `websockets` 14.2 or newer. When the gateway rejects the
+upgrade (401, 403, 503) it sends the error body with chunked transfer
+encoding, and `websockets` releases before 14.2 raise a bare
+`NotImplementedError("transfer codings aren't supported")` instead of
+reporting the status. If you see that error, upgrade `websockets`.
+
 ## Sessions and framing
 
 Audio frames must be 20 to 1000 ms of complete samples; `stream_chunks()` and

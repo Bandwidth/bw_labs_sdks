@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Require `websockets` 14.2 or newer so rejected upgrades (401, 403, 503) surface
+  as typed errors instead of `NotImplementedError` on chunked gateway responses.
+
 ## 0.2.0
 
 - Distribution: 0.2.0 is installed from this repository (`pip install "git+https://github.com/Bandwidth/bw_labs_sdks.git@v0.2.0#subdirectory=python"`); PyPI publication is deferred.
